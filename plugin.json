@@ -1,0 +1,40 @@
+{
+  "name": "syplugin-image-pin-preview",
+  "author": "Misuzu2027",
+  "url": "https://github.com/Misuzu2027/syplugin-image-pin-preview",
+  "version": "0.0.1",
+  "minAppVersion": "3.0.12",
+  "backends": [
+    "windows",
+    "linux",
+    "darwin",
+    "ios",
+    "android",
+    "harmony",
+    "docker"
+  ],
+  "frontends": [
+    "desktop",
+    "mobile",
+    "browser-desktop",
+    "browser-mobile",
+    "desktop-window"
+  ],
+  "displayName": {
+    "en_US": "Image Pin Preview",
+    "zh_CN": "图片悬浮预览"
+  },
+  "description": {
+    "en_US": "替代原生图片查看功能，让图片支持悬浮预览",
+    "zh_CN": "替代原生图片查看功能，让图片支持悬浮预览"
+  },
+  "readme": {
+    "zh_CN": "README_zh_CN.md"
+  },
+  "funding": {
+    "custom": [
+      ""
+    ]
+  },
+  "keywords": []
+}
