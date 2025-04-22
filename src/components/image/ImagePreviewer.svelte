@@ -10,7 +10,9 @@
     let containerScale = 1;
     let maxScale = 4;
     let minWidth = 80;
-    let lastUpdateWidth: number;
+    let lastImageWidth: number;
+    let lastImageCustomWidth: number;
+    let lastImageCustomScale: number;
 
     let position = { x: 0, y: 0 };
     let positionLimit = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
@@ -34,7 +36,7 @@
         if (imageElementRef.naturalWidth > maxWidth) {
             containerElementRef.style.width = maxWidth + "px";
         }
-    
+
         containerElementRef.focus();
 
         centerImage();
@@ -73,14 +75,8 @@
         let oldContainerRect = containerElementRef.getBoundingClientRect();
         let imageNaturalWidth = imageElementRef.naturalWidth;
 
-        // 获取图片的当前宽度
-        let containerWidth = containerElementRef.style.width;
-        let containerWidthNum = 0;
-        if (isStrNotBlank(containerWidth) && containerWidth.indexOf("px")) {
-            containerWidthNum = Number(containerWidth.replace("px", ""));
-        } else {
-            containerWidthNum = oldContainerRect.width;
-        }
+        // 获取图片容器当前宽度
+        let containerWidthNum = getContainerWidth();
 
         // 如果当前容器宽度大于图片宽度，说明用了 scale
         if (
@@ -96,10 +92,6 @@
             if (newScale !== containerScale) {
                 containerScale = newScale;
             }
-            if (containerScale > 1) {
-                lastUpdateWidth =
-                    containerElementRef.getBoundingClientRect().width;
-            }
         } else {
             // 设置缩放步长，根据滚动的速度调整步长
             const widthAmount = scaleFactor * 0.3; // 控制缩放速度，你可以调整这个值来改变滚动的敏感度
@@ -110,7 +102,6 @@
             );
             // 设置容器的新宽度
             containerElementRef.style.width = `${newWidth}px`;
-            lastUpdateWidth = newWidth;
         }
 
         keepCenterPosition(oldContainerRect, 1);
@@ -204,18 +195,33 @@
     let lastTapTime = 0;
     const DOUBLE_TAP_THRESHOLD = 300; // 毫秒，双击间隔上限
 
-    function onClick() {
+    function onPointerdown() {
         const currentTime = new Date().getTime();
         const timeDiff = currentTime - lastTapTime;
 
         if (timeDiff < DOUBLE_TAP_THRESHOLD && timeDiff > 0 && !isZoomIn) {
             let oldContainerRect = containerElementRef.getBoundingClientRect();
-            containerScale = 1;
-            let minWidth = Math.min(
+            let oldContainerWidth = getContainerWidth();
+
+            let defWidth = Math.min(
                 imageElementRef.naturalWidth,
                 window.innerWidth * 0.8,
             );
-            containerElementRef.style.width = minWidth + "px";
+            if (containerScale != 1 || oldContainerWidth != defWidth) {
+                lastImageCustomScale = containerScale;
+                containerScale = 1;
+                lastImageCustomWidth = oldContainerWidth;
+                containerElementRef.style.width = defWidth + "px";
+            } else if (lastImageCustomScale && lastImageCustomWidth) {
+                if (lastImageCustomWidth > imageElementRef.naturalWidth) {
+                    lastImageCustomWidth = imageElementRef.naturalWidth;
+                }
+                containerScale = lastImageCustomScale;
+                containerElementRef.style.width = lastImageCustomWidth + "px";
+                lastImageCustomScale = 1;
+                lastImageCustomWidth = null;
+            }
+
             keepCenterPosition(oldContainerRect, 1);
         }
 
@@ -327,6 +333,7 @@
 
     function updateImageSrcAndPosition() {
         const oldContainerRect = containerElementRef.getBoundingClientRect();
+        lastImageWidth = oldContainerRect.width;
         imageElementRef.src = images[currentIndex];
         let scaleTemp = containerScale;
         containerScale = 1;
@@ -344,8 +351,8 @@
                 if (oldContainerRect.width > imgNaturalWidth) {
                     containerElementRef.style.width = "";
                 }
-                if (lastUpdateWidth && imgNaturalWidth > lastUpdateWidth) {
-                    containerElementRef.style.width = lastUpdateWidth + "px";
+                if (lastImageWidth && imgNaturalWidth > lastImageWidth) {
+                    containerElementRef.style.width = lastImageWidth + "px";
                 }
                 keepCenterPosition(oldContainerRect, scaleTemp);
                 updatePositionLimit();
@@ -402,6 +409,19 @@
             prevImage();
         }
     }
+
+    function getContainerWidth(): number {
+        // 获取图片的当前宽度
+        let containerWidth = containerElementRef.style.width;
+        let containerWidthNum = 0;
+        if (isStrNotBlank(containerWidth) && containerWidth.indexOf("px")) {
+            containerWidthNum = Number(containerWidth.replace("px", ""));
+        } else {
+            containerWidthNum =
+                containerElementRef.getBoundingClientRect().width;
+        }
+        return containerWidthNum;
+    }
 </script>
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -416,7 +436,7 @@
     bind:this={containerElementRef}
     class="image-wrapper"
     style="transform: translate({position.x}px, {position.y}px) scale({containerScale}); pointer-events: auto;user-select:none;display: inline-block;"
-    on:pointerdown={onClick}
+    on:pointerdown={onPointerdown}
     on:wheel|passive={onWheel}
     on:mousemove={onMouseMove}
     on:mousedown={onMouseDown}
@@ -443,6 +463,7 @@
             style="user-select:none;"
             contenteditable="false"
             on:click|stopPropagation={onClose}
+            on:pointerdown|stopPropagation
             on:dblclick|stopPropagation
             on:mousedown|stopPropagation
             on:mouseup|stopPropagation
@@ -460,6 +481,7 @@
             style="user-select:none;"
             contenteditable="false"
             on:click|stopPropagation={prevImage}
+            on:pointerdown|stopPropagation
             on:dblclick|stopPropagation
             on:mousedown|stopPropagation
             on:mouseup|stopPropagation
@@ -470,6 +492,7 @@
             style="user-select:none;"
             contenteditable="false"
             on:click|stopPropagation={nextImage}
+            on:pointerdown|stopPropagation
             on:dblclick|stopPropagation
             on:mousedown|stopPropagation
             on:mouseup|stopPropagation

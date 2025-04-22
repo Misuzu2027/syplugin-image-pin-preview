@@ -40,7 +40,7 @@ function initBusEvent() {
 
 
 function handleLoadedProtyle(e) {
-    console.log("handleLoadedProtyle ", e)
+    // console.log("handleLoadedProtyle ", e)
     // let protyleElement = e.detail.protyle.element;
     // addObserveCodeBlockLanguageElement(protyleElement);
     let wysiwygElement = e.detail.protyle.wysiwyg.element;
@@ -138,7 +138,7 @@ async function handleImageDoubleClick(event: MouseEvent) {
 
     if (imgAssets.length === 0) return;
 
-    console.log("imgAssets ", imgAssets, " ,imgIndex ", imgIndex);
+    // console.log("imgAssets ", imgAssets, " ,imgIndex ", imgIndex);
     previewImages(imgAssets, imgIndex);
 }
 
