@@ -1,8 +1,12 @@
+
 // https://github.com/siyuan-note/siyuan/blob/171bfd62a70698879057742c2813f54f84164b66/app/src/menus/Menu.ts#L162
 export class MenuItem {
     public element: HTMLElement;
 
     constructor(options: IMenu) {
+        if (options.ignore) {
+            return;
+        }
         if (options.type === "empty") {
             this.element = document.createElement("div");
             this.element.innerHTML = options.label;
@@ -15,6 +19,9 @@ export class MenuItem {
         this.element = document.createElement("button");
         if (options.disabled) {
             this.element.setAttribute("disabled", "disabled");
+        }
+        if (options.id) {
+            this.element.setAttribute("data-id", options.id);
         }
         if (options.type === "separator") {
             this.element.classList.add("b3-menu__separator");
@@ -42,11 +49,11 @@ export class MenuItem {
                 }
             });
         }
-        if (options.id) {
-            this.element.setAttribute("data-id", options.id);
-        }
         if (options.type === "readonly") {
             this.element.classList.add("b3-menu__item--readonly");
+        }
+        if (options.icon === "iconTrashcan" || options.warning) {
+            this.element.classList.add("b3-menu__item--warning");
         }
 
         if (options.element) {
@@ -63,6 +70,9 @@ export class MenuItem {
             }
             if (options.action) {
                 html += `<svg class="b3-menu__action${options.action === "iconCloseRound" ? " b3-menu__action--close" : ""}"><use xlink:href="#${options.action}"></use></svg>`;
+            }
+            if (options.checked) {
+                html += '<svg class="b3-menu__checked"><use xlink:href="#iconSelect"></use></svg></span>';
             }
             this.element.innerHTML = html;
         }
@@ -85,3 +95,4 @@ export class MenuItem {
         }
     }
 }
+

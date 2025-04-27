@@ -2,11 +2,10 @@ import { EnvConfig } from "@/config/EnvConfig";
 import Instance from "@/utils/Instance";
 import { SettingService } from "../setting/SettingService";
 import ImagePreviewerSvelte from "@/components/image/ImagePreviewer.svelte"
-import { isStrBlank, isStrNotBlank } from "@/utils/string-util";
-import { getBlockByID, getDocImageAssets, sql } from "@/utils/api";
-import { hasClosestById, hasClosestBySelector, stringToElement, wrapElementsInParent } from "@/utils/html-util";
-import { isArrayEmpty } from "@/utils/array-util";
-import { SvelteComponent, SvelteComponentTyped } from "svelte";
+import { isStrNotBlank } from "@/utils/string-util";
+import { getDocImageAssets } from "@/utils/api";
+import { hasClosestBySelector, stringToElement } from "@/utils/html-util";
+import { SvelteComponent } from "svelte";
 
 export class ImageService {
 
@@ -56,7 +55,7 @@ function handleWsMain(e) {
     ) {
         return;
     }
-    console.log("handleWsMain ", e)
+    // console.log("handleWsMain ", e)
 
     let existUpdateImg = false;
 
@@ -68,7 +67,6 @@ function handleWsMain(e) {
             if (doOperation && (doOperation.action == "update" || doOperation.action == "insert")) {
                 let operationElement = stringToElement(doOperation.data);
                 if (operationElement && operationElement.querySelectorAll(`span[data-type*="img"].img img`)) {
-                    console.log("doOperation ", doOperation)
                     existUpdateImg = true;
                     break;
                 }
