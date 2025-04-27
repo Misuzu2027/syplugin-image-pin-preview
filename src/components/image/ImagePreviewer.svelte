@@ -7,10 +7,17 @@
     import { isStrBlank, isStrNotBlank } from "@/utils/string-util";
     import { getFrontend } from "siyuan";
     import { onMount, onDestroy } from "svelte";
+    import {
+        getDistance,
+        getEventPosition,
+        getTouchCenterPosition,
+        Vector2,
+    } from "@/utils/position-util";
+    import { changeImageKeepPosition, zoomImageKeepPosition } from "@/service/image/ImagePreviewerService";
 
     export let images: string[] = [];
     export let startIndex: number = 0;
-    export let onClose: () => void = () => {};
+    export let handleCloseClick: () => void = () => {};
 
     let currentIndex = startIndex;
     let imageMaxScale = 100;
@@ -20,40 +27,41 @@
 
     let containerAngle = 0;
 
-    let position = { x: 0, y: 0 };
+    let position: Vector2 = { x: 0, y: 0 };
     let positionLimit = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
 
     let isDragging = false;
-    let dragStartPos = { x: 0, y: 0 };
-    let containerStart = { x: 0, y: 0 };
+    let dragStartPos: Vector2 = { x: 0, y: 0 };
+    let containerStart: Vector2 = { x: 0, y: 0 };
 
     let containerElementRef: HTMLElement;
     let imageElementRef: HTMLImageElement;
 
     onMount(() => {
         imageElementRef.src = images[currentIndex];
-        window.addEventListener("mousemove", onMouseMove);
-        window.addEventListener("mouseup", onMouseUp);
+        window.addEventListener("mousemove", handleMouseMove);
+        window.addEventListener("mouseup", handleWindowMouseUp);
         // window.addEventListener("touchstart", onTouchStart);
-        window.addEventListener("touchmove", onTouchMove);
-        window.addEventListener("touchend", onTouchEnd);
+        window.addEventListener("touchmove", handleTouchMove);
+        window.addEventListener("touchend", handleTouchEnd);
         containerElementRef.addEventListener("keydown", handleKeydown);
 
         containerElementRef.focus();
 
+        updateImgNetSvg();
         setInitialImageWidthAndPosition();
     });
 
     onDestroy(() => {
-        window.removeEventListener("mouseup", onMouseUp);
-        window.removeEventListener("mousemove", onMouseMove);
-        window.removeEventListener("touchstart", onTouchStart);
-        window.removeEventListener("touchmove", onTouchMove);
-        window.removeEventListener("touchend", onTouchEnd);
+        window.removeEventListener("mouseup", handleWindowMouseUp);
+        window.removeEventListener("mousemove", handleMouseMove);
+        // window.removeEventListener("touchstart", onTouchStart);
+        window.removeEventListener("touchmove", handleTouchMove);
+        window.removeEventListener("touchend", handleTouchEnd);
         containerElementRef.removeEventListener("keydown", handleKeydown);
     });
 
-    function onWheel(event: WheelEvent) {
+    function handleImageContainerWheel(event: WheelEvent) {
         // event.preventDefault();
 
         // 计算滚动的缩放量
@@ -70,10 +78,10 @@
             checkPositionLimit();
             return;
         }
-        zoomImage(-delta, event.clientX, event.clientY);
+        zoomImage(-delta, { x: event.clientX, y: event.clientY });
     }
 
-    function zoomImage(scaleFactor: number, mouseX: number, mouseY: number) {
+    function zoomImage(scaleFactor: number, zoomPosition: Vector2) {
         let oldContainerRect = containerElementRef.getBoundingClientRect();
 
         // 获取图片容器当前宽度
@@ -92,7 +100,11 @@
         // 设置容器的新宽度
         updateImageWidth(newWidth);
 
-        zoomImageKeepPosition(oldContainerRect, mouseX, mouseY);
+        position = zoomImageKeepPosition(
+            oldContainerRect,
+            containerElementRef.getBoundingClientRect(),
+            zoomPosition,
+        );
 
         // 可以根据新的宽度，更新位置限制等其他逻辑
         updatePositionLimit();
@@ -107,19 +119,7 @@
         }
     }
 
-    function getEventPosition(event: MouseEvent | TouchEvent): {
-        x: number;
-        y: number;
-    } {
-        if (event instanceof TouchEvent) {
-            const touch = event.touches[0] || event.changedTouches[0];
-            return { x: touch.clientX, y: touch.clientY };
-        } else {
-            return { x: event.clientX, y: event.clientY };
-        }
-    }
-
-    function onMouseDown(event: MouseEvent) {
+    function handleMouseDown(event: MouseEvent) {
         const pos = getEventPosition(event);
         startImageDrag(pos);
         doubleClickImage(pos);
@@ -131,12 +131,12 @@
      */
     let touchStartDistance = 0;
 
-    let touchStartCenterPosition: { x: number; y: number };
+    let touchStartCenterPosition: Vector2;
 
     let longPressTimeout;
     const longPressDuration = 400; // ms，长按阈值
 
-    function onTouchStart(event: TouchEvent) {
+    function handleTouchStart(event: TouchEvent) {
         window.siyuan.menus.menu.remove();
 
         // 双指是照片缩放
@@ -169,7 +169,7 @@
         }
     }
 
-    function onTouchMove(event: TouchEvent) {
+    function handleTouchMove(event: TouchEvent) {
         if (isZoomIn) {
             event.preventDefault();
             event.stopPropagation();
@@ -181,11 +181,7 @@
             if (currentDistance < touchStartDistance) {
                 scaleChange = -scaleChange * 2.5;
             }
-            zoomImage(
-                scaleChange,
-                touchStartCenterPosition.x,
-                touchStartCenterPosition.y,
-            );
+            zoomImage(scaleChange, touchStartCenterPosition);
             return;
         }
         if (isDragging) {
@@ -198,7 +194,7 @@
         }
     }
 
-    function onTouchEnd(event: TouchEvent) {
+    function handleTouchEnd(event: TouchEvent) {
         if (event.touches.length < 2) {
             // 双指操作结束
             isZoomIn = false;
@@ -209,7 +205,7 @@
         clearTimeout(longPressTimeout);
     }
 
-    function doubleClickImage(pos: { x: number; y: number }) {
+    function doubleClickImage(pos: Vector2) {
         const currentTime = new Date().getTime();
         const timeDiff = currentTime - lastTapTime;
 
@@ -232,7 +228,11 @@
 
                 lastImageCustomWidth = null;
             }
-            zoomImageKeepPosition(oldContainerRect, pos.x, pos.y);
+            position = zoomImageKeepPosition(
+                oldContainerRect,
+                containerElementRef.getBoundingClientRect(),
+                pos,
+            );
             updatePositionLimit();
             checkPositionLimit();
         }
@@ -240,7 +240,24 @@
         lastTapTime = currentTime;
     }
 
-    function moveImageDrag(pos: { x: number; y: number }) {
+    function handleMouseMove(event: MouseEvent) {
+        const pos = getEventPosition(event);
+        moveImageDrag(pos);
+    }
+
+    function handleWindowMouseUp() {
+        stopImageDrag();
+        // console.log("onMouseUp position ", position);
+    }
+    function startImageDrag(pos: Vector2) {
+        isDragging = true;
+        updatePositionLimit();
+        dragStartPos = pos;
+        containerStart = { ...position };
+    }
+
+    
+    function moveImageDrag(pos: Vector2) {
         if (!isDragging) return;
 
         const dx = pos.x - dragStartPos.x;
@@ -255,21 +272,6 @@
         checkPositionLimit();
     }
 
-    function onMouseMove(event: MouseEvent) {
-        const pos = getEventPosition(event);
-        moveImageDrag(pos);
-    }
-
-    function onMouseUp() {
-        stopImageDrag();
-        // console.log("onMouseUp position ", position);
-    }
-    function startImageDrag(pos: { x: number; y: number }) {
-        isDragging = true;
-        updatePositionLimit();
-        dragStartPos = pos;
-        containerStart = { ...position };
-    }
 
     function stopImageDrag() {
         isDragging = false;
@@ -278,7 +280,7 @@
     let lastTapTime = 0;
     const DOUBLE_TAP_THRESHOLD = 300; // 毫秒，双击间隔上限
 
-    function onContextmenu(event: MouseEvent) {
+    function handleContextmenu(event: MouseEvent) {
         event.stopPropagation();
         event.preventDefault();
 
@@ -325,32 +327,7 @@
         }
     }
 
-    function getDistance(touches: TouchList) {
-        const dx = touches[0].clientX - touches[1].clientX;
-        const dy = touches[0].clientY - touches[1].clientY;
-        // console.log(`getDistance dx ${dx} , dy ${dy}`);
-        return Math.sqrt(dx * dx + dy * dy);
-    }
-
-    function getTouchCenterPosition(
-        touches: TouchList,
-    ): { x: number; y: number } | null {
-        if (touches.length === 0) return null;
-
-        let totalX = 0;
-        let totalY = 0;
-
-        for (let i = 0; i < touches.length; i++) {
-            totalX += touches[i].clientX;
-            totalY += touches[i].clientY;
-        }
-
-        const centerX = totalX / touches.length;
-        const centerY = totalY / touches.length;
-
-        return { x: centerX, y: centerY };
-    }
-    function nextImage() {
+    function handleNextBtnClick() {
         currentIndex++;
         if (currentIndex > images.length - 1) {
             currentIndex = currentIndex % images.length;
@@ -358,7 +335,7 @@
         updateImageSrcAndPosition();
     }
 
-    function prevImage() {
+    function handlePrevBtnClick() {
         currentIndex--;
         if (currentIndex < 0) {
             currentIndex = images.length + currentIndex;
@@ -390,13 +367,20 @@
                 }
 
                 updateImageWidth(newWidth);
-                changeImageKeepPosition(oldContainerRect);
+                position = changeImageKeepPosition(
+                    oldContainerRect,
+                    containerElementRef.getBoundingClientRect(),
+                    position,
+                );
                 updatePositionLimit();
                 checkPositionLimit();
             },
             { once: true },
         );
         imageElementRef.src = images[currentIndex];
+    }
+
+    function updateImgNetSvg() {
         let imgNetElement = containerElementRef.querySelector(".img__net");
         if (isLocalPath(images[currentIndex])) {
             imgNetElement?.classList.add("fn__none");
@@ -437,52 +421,6 @@
         position = { x: newX, y: position.y };
     }
 
-    function zoomImageKeepPosition(
-        oldContainerRect: DOMRect,
-        mouseX: number,
-        mouseY: number,
-    ) {
-        const newContainerRect = containerElementRef.getBoundingClientRect();
-
-        // 鼠标在旧容器内的相对位置（归一化）
-        const ratioX =
-            (mouseX - oldContainerRect.left) / oldContainerRect.width;
-        const ratioY =
-            (mouseY - oldContainerRect.top) / oldContainerRect.height;
-
-        // 鼠标对应的新容器内位置
-        const targetX = newContainerRect.width * ratioX;
-        const targetY = newContainerRect.height * ratioY;
-
-        const worldX = mouseX;
-        const worldY = mouseY;
-
-        // 新位置应该使得世界坐标落在鼠标位置
-        let newX = worldX - targetX;
-        let newY = worldY - targetY;
-
-        position = { x: newX, y: newY };
-    }
-
-    function changeImageKeepPosition(oldContainerRect: DOMRect) {
-        const newContainerRect = containerElementRef.getBoundingClientRect();
-        // 如果新图片顶部被遮挡，就顶部对齐
-        const prevCenterX = position.x + oldContainerRect.width / 2;
-        const prevCenterY = position.y + oldContainerRect.height / 2;
-        const newCenterX = newContainerRect.width / 2;
-        const newCenterY = newContainerRect.height / 2;
-        // 计算新图片的 translate 值，使其中心对齐前一张图片的中心
-        let translateX = prevCenterX - newCenterX;
-        let translateY = prevCenterY - newCenterY;
-        let topMin = 0;
-        if (translateY < topMin) {
-            translateY = topMin;
-        }
-        // console.log("oldPosition ", position);
-        position = { x: translateX, y: translateY };
-        // console.log("newPosition ", position);
-    }
-
     function setInitialImageWidthAndPosition() {
         let maxWidth = window.innerWidth * 0.9;
         let maxHeight = window.innerHeight;
@@ -520,11 +458,11 @@
     function handleKeydown(e: KeyboardEvent) {
         e.stopPropagation();
         if (e.key === "Escape") {
-            onClose();
+            handleCloseClick();
         } else if (e.key === "ArrowRight") {
-            nextImage();
+            handleNextBtnClick();
         } else if (e.key === "ArrowLeft") {
-            prevImage();
+            handlePrevBtnClick();
         } else if (
             e.ctrlKey &&
             e.shiftKey &&
@@ -549,7 +487,7 @@
         return containerWidthNum;
     }
 
-    async function imageContextmenuEvent(pos: { x: number; y: number }) {
+    async function imageContextmenuEvent(pos: Vector2) {
         let imageSrc = imageElementRef.getAttribute("src");
         window.siyuan.menus.menu.remove();
 
@@ -557,7 +495,7 @@
             new MenuItem({
                 label: "上一张",
                 click: () => {
-                    prevImage();
+                    handlePrevBtnClick();
                 },
             }).element,
         );
@@ -565,7 +503,7 @@
             new MenuItem({
                 label: "下一张",
                 click: () => {
-                    nextImage();
+                    handleNextBtnClick();
                 },
             }).element,
         );
@@ -573,7 +511,7 @@
             new MenuItem({
                 label: "关闭图片",
                 click: () => {
-                    onClose();
+                    handleCloseClick();
                 },
             }).element,
         );
@@ -759,13 +697,13 @@
     bind:this={containerElementRef}
     class="image-wrapper"
     style="transform:rotate({containerAngle}deg) ;left: {position.x}px;top: {position.y}px; pointer-events: auto;user-select:none;display: inline-block; "
-    on:wheel|passive={onWheel}
-    on:mousemove={onMouseMove}
-    on:mousedown={onMouseDown}
-    on:touchstart={onTouchStart}
-    on:touchmove|stopPropagation|preventDefault={onTouchMove}
-    on:touchend|stopPropagation|preventDefault={onTouchEnd}
-    on:contextmenu={onContextmenu}
+    on:wheel|passive={handleImageContainerWheel}
+    on:mousemove={handleMouseMove}
+    on:mousedown={handleMouseDown}
+    on:touchstart={handleTouchStart}
+    on:touchmove|stopPropagation|preventDefault={handleTouchMove}
+    on:touchend|stopPropagation|preventDefault={handleTouchEnd}
+    on:contextmenu={handleContextmenu}
 >
     <img
         style="user-select:none;max-width: none !important; min-width: 74px;min-height: 80px;"
@@ -787,7 +725,7 @@
         <button
             style="user-select:none;"
             contenteditable="false"
-            on:click|stopPropagation={onClose}
+            on:click|stopPropagation={handleCloseClick}
             on:pointerdown|stopPropagation
             on:dblclick|stopPropagation
             on:mousedown|stopPropagation
@@ -807,7 +745,7 @@
         <button
             style="user-select:none;"
             contenteditable="false"
-            on:click|stopPropagation={prevImage}
+            on:click|stopPropagation={handlePrevBtnClick}
             on:pointerdown|stopPropagation
             on:dblclick|stopPropagation
             on:mousedown|stopPropagation
@@ -820,7 +758,7 @@
         <button
             style="user-select:none;"
             contenteditable="false"
-            on:click|stopPropagation={nextImage}
+            on:click|stopPropagation={handleNextBtnClick}
             on:pointerdown|stopPropagation
             on:dblclick|stopPropagation
             on:mousedown|stopPropagation

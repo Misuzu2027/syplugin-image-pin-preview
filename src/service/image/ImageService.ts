@@ -216,7 +216,7 @@ export function previewImages(images: string[], startIndex = 0) {
         props: {
             images,
             startIndex,
-            onClose: () => closeImagePreview(imagePreviewerSvelte, container)
+            handleCloseClick: () => closeImagePreview(imagePreviewerSvelte, container)
         }
     });
 }
