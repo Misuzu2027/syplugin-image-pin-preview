@@ -7,6 +7,8 @@ export class SettingConfig {
     /* 查询相关 */
     isOpen: Boolean;
 
+    showOptionButton: Boolean;
+
 }
 
 

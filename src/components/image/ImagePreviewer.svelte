@@ -13,11 +13,17 @@
         getTouchCenterPosition,
         Vector2,
     } from "@/utils/position-util";
-    import { changeImageKeepPosition, zoomImageKeepPosition } from "@/service/image/ImagePreviewerService";
+    import {
+        changeImageKeepPosition,
+        zoomImageKeepPosition,
+    } from "@/service/image/ImagePreviewerService";
+    import { SettingService } from "@/service/setting/SettingService";
 
     export let images: string[] = [];
     export let startIndex: number = 0;
     export let handleCloseClick: () => void = () => {};
+
+    let showOptionButton ;
 
     let currentIndex = startIndex;
     let imageMaxScale = 100;
@@ -47,6 +53,7 @@
         containerElementRef.addEventListener("keydown", handleKeydown);
 
         containerElementRef.focus();
+        showOptionButton = SettingService.ins.SettingConfig.showOptionButton;
 
         updateImgNetSvg();
         setInitialImageWidthAndPosition();
@@ -120,9 +127,11 @@
     }
 
     function handleMouseDown(event: MouseEvent) {
-        const pos = getEventPosition(event);
-        startImageDrag(pos);
-        doubleClickImage(pos);
+        if (event.button == 0) {
+            const pos = getEventPosition(event);
+            startImageDrag(pos);
+            doubleClickImage(pos);
+        }
     }
     let isZoomIn = false;
 
@@ -134,7 +143,7 @@
     let touchStartCenterPosition: Vector2;
 
     let longPressTimeout;
-    const longPressDuration = 400; // ms，长按阈值
+    const longPressDuration = 350; // ms，长按阈值
 
     function handleTouchStart(event: TouchEvent) {
         window.siyuan.menus.menu.remove();
@@ -256,7 +265,6 @@
         containerStart = { ...position };
     }
 
-    
     function moveImageDrag(pos: Vector2) {
         if (!isDragging) return;
 
@@ -272,7 +280,6 @@
         checkPositionLimit();
     }
 
-
     function stopImageDrag() {
         isDragging = false;
     }
@@ -281,7 +288,6 @@
     const DOUBLE_TAP_THRESHOLD = 300; // 毫秒，双击间隔上限
 
     function handleContextmenu(event: MouseEvent) {
-        event.stopPropagation();
         event.preventDefault();
 
         let pos = getEventPosition(event);
@@ -638,7 +644,7 @@
                 type: "separator",
             }).element,
         );
-        // todo 打开文件位置
+        
         let frontend = getFrontend();
 
         if (
@@ -676,6 +682,22 @@
             }).element,
         );
 
+        window.siyuan.menus.menu.append(
+            new MenuItem({
+                type: "separator",
+            }).element,
+        );
+         // 显示/隐藏按钮
+         window.siyuan.menus.menu.append(
+            new MenuItem({
+                label: "显示/隐藏按钮",
+                click: () => {
+                    showOptionButton = !showOptionButton;
+                },
+            }).element,
+        );
+
+
         window.siyuan.menus.menu.popup({ x: pos.x, y: pos.y });
         // console.log("window.siyuan.menus.menu ", window.siyuan.menus.menu);
         window.siyuan.menus.menu.element.style.zIndex = 999999;
@@ -703,7 +725,7 @@
     on:touchstart={handleTouchStart}
     on:touchmove|stopPropagation|preventDefault={handleTouchMove}
     on:touchend|stopPropagation|preventDefault={handleTouchEnd}
-    on:contextmenu={handleContextmenu}
+    on:contextmenu|stopPropagation={handleContextmenu}
 >
     <img
         style="user-select:none;max-width: none !important; min-width: 74px;min-height: 80px;"
@@ -717,6 +739,7 @@
     <span class="img__net"
         ><svg><use xlink:href="#iconLanguage"></use></svg></span
     >
+    {#if showOptionButton}
     <div
         class="nav-buttons nav-close"
         style="user-select:none;"
@@ -736,7 +759,6 @@
             ><svg><use xlink:href="#iconClose"></use></svg></button
         >
     </div>
-
     <div
         class="nav-buttons nav-page"
         style="user-select:none;"
@@ -772,6 +794,8 @@
             
         </button> -->
     </div>
+        
+    {/if}
     <div class="footer" contenteditable="false" style="user-select:none;">
         {currentIndex + 1} / {images.length}
     </div>

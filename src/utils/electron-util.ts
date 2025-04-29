@@ -34,3 +34,12 @@ export function isBrowser(): boolean {
     }
     return false;
 }
+
+
+export function isMobileClient(): boolean {
+    let frontend = getFrontend();
+    if (frontend == "mobile") {
+        return true;
+    }
+    return false;
+}

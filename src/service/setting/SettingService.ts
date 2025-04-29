@@ -109,6 +109,8 @@ function getDefaultSettingConfig() {
 
     /* 查询相关 */
     defaultConfig.isOpen = true;
+
+    defaultConfig.showOptionButton = true;
     return defaultConfig;
 }
 

@@ -1,7 +1,7 @@
-import { Constants, fetchPost } from "siyuan";
+import { Constants, fetchPost, getFrontend } from "siyuan";
 import { getAssetName, pathPosix } from "../util/pathName";
-import { isBrowser } from "@/utils/electron-util";
-import { exportByMobile, isInAndroid } from "../protyle/util/compatibility";
+import { isBrowser, isMobileClient as isMobile } from "@/utils/electron-util";
+import { exportByMobile, isInAndroid, isInIOS } from "../protyle/util/compatibility";
 
 
 export const exportAsset = async (src: string) => {
@@ -11,7 +11,7 @@ export const exportAsset = async (src: string) => {
     }
 
 
-    if (isBrowser() || !src.startsWith("assets/")) {
+    if (isBrowser() || isMobile() || !src.startsWith("assets/")) {
         exportByMobile(src);
     } else if (electron && electron.ipcRenderer) {
         const result = await electron.ipcRenderer.invoke(Constants.SIYUAN_GET, {
