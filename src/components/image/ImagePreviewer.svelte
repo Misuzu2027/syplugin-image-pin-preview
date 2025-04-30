@@ -465,10 +465,10 @@
         e.stopPropagation();
         if (e.key === "Escape") {
             handleCloseClick();
-        } else if (e.key === "ArrowRight") {
-            handleNextBtnClick();
-        } else if (e.key === "ArrowLeft") {
+        } else if (e.key === "ArrowLeft" || e.key.toLocaleLowerCase() === "a" || e.key.toLocaleLowerCase() === "w") {
             handlePrevBtnClick();
+        } else if (e.key === "ArrowRight" || e.key.toLocaleLowerCase() === "d" || e.key.toLocaleLowerCase() === "s") {
+            handleNextBtnClick();
         } else if (
             e.ctrlKey &&
             e.shiftKey &&
