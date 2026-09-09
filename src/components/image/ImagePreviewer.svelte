@@ -1,8 +1,8 @@
 <script lang="ts">
-    import { writeText } from "@/libs/siyuan/protyle/util/compatibility";
     import { openBy } from "@/libs/siyuan/editor/util";
     import { MenuItem } from "@/libs/siyuan/menus/Menu";
-    import { copyPNGByLink, exportAsset } from "@/libs/siyuan/menus/util";
+    import { copyAssetFile, copyPNGByLink, exportAsset, getCopyFilePath } from "@/libs/siyuan/menus/util";
+    import { canCopyImageToClipboard, copyPlainText, notifyCopyFailed, notifyCopySuccess } from "@/utils/clipboard";
     import { isLocalPath } from "@/libs/siyuan/util/pathName";
     import { getFrontend } from "siyuan";
     import { onMount, onDestroy } from "svelte";
@@ -26,9 +26,10 @@
     } from "@/service/image/ImagePreviewerService";
     import { SettingService } from "@/service/setting/SettingService";
     import { EnvConfig } from "@/config/EnvConfig";
-    import { getImageFileName } from "@/utils/image-url";
+    import { getDisplayImageName } from "@/utils/image-url";
 
     export let images: string[] = [];
+    export let imageTitles: string[] = [];
     export let startIndex: number = 0;
     export let handleCloseClick: () => void = () => {};
 
@@ -36,9 +37,15 @@
     const LONG_PRESS_MS = 350;
     const MIN_WIDTH = 80;
     const TOOLBAR_MIN_WIDTH = 300;
+    const TOOLBAR_WITH_COPY_MIN_WIDTH = 332;
     const NAV_MIN_WIDTH = 168;
     const NAV_MIN_HEIGHT = 96;
     const CLOSE_MIN_SIZE = 88;
+    const INDEX_MIN_WIDTH = 72;
+    const INDEX_MIN_HEIGHT = 48;
+    const META_MIN_WIDTH = 160;
+    const META_MIN_HEIGHT = 80;
+    const NAME_MIN_WIDTH = 240;
 
     let showOptionButton = SettingService.ins.SettingConfig?.showOptionButton !== false;
     let currentIndex = Math.min(Math.max(startIndex, 0), Math.max(images.length - 1, 0));
@@ -71,11 +78,21 @@
     $: contentH = Math.max(1, naturalH * displayScale);
     $: visual = getVisualSize(naturalW, naturalH, displayScale, rotate);
     $: imageCss = imageFlipCss(rotate, flipH, flipV);
-    $: fileName = getImageFileName(currentSrc || images[currentIndex] || "");
-    $: showOverlayTools = showOptionButton && visual.width >= TOOLBAR_MIN_WIDTH;
+    $: fileName = getDisplayImageName(currentSrc || images[currentIndex] || "");
+    $: imageTitle = (imageTitles[currentIndex] || "").trim();
+    $: showTitle = !!imageTitle && imageTitle !== fileName;
+    $: showCopyFile = !!getCopyFilePath(currentSrc || images[currentIndex] || "");
+    $: showCopyPNG = canCopyImageToClipboard();
+    $: showToolbarCopy = showCopyFile || showCopyPNG;
+    $: showOverlayTools = showOptionButton && visual.width >= (showToolbarCopy ? TOOLBAR_WITH_COPY_MIN_WIDTH : TOOLBAR_MIN_WIDTH);
     $: showOverlayNav = showOptionButton && images.length > 1 && visual.width >= NAV_MIN_WIDTH && visual.height >= NAV_MIN_HEIGHT;
     $: showOverlayClose = visual.width >= CLOSE_MIN_SIZE && visual.height >= CLOSE_MIN_SIZE;
-    $: showOverlayFooter = visual.width >= 120 && visual.height >= 64;
+    $: showOverlayIndex = visual.width >= INDEX_MIN_WIDTH && visual.height >= INDEX_MIN_HEIGHT;
+    $: canShowMeta = visual.width >= META_MIN_WIDTH && visual.height >= META_MIN_HEIGHT;
+    $: showOverlayName = canShowMeta && visual.width >= NAME_MIN_WIDTH;
+    $: showOverlayMeta = canShowMeta && ((showOverlayName && (!!fileName || showTitle)) || !!(naturalW && naturalH));
+
+    let copiedTipKey = "";
 
     onMount(() => {
         window.addEventListener("pointermove", handlePointerMove);
@@ -193,6 +210,7 @@
         }
         loading = true;
         loadError = false;
+        copiedTipKey = "";
         const keepWidth = visual.width;
         const oldPos = { ...position };
         const oldVisual = { ...visual };
@@ -437,12 +455,16 @@
         }
         if (event.ctrlKey && event.shiftKey && key === "c") {
             event.preventDefault();
+            if (!showCopyPNG) {
+                notifyCopyFailed("permission");
+                return;
+            }
             copyPNGByLink(currentSrc);
             return;
         }
         if (event.ctrlKey && key === "c") {
             event.preventDefault();
-            writeText(`![](${currentSrc})`);
+            copyPlainText(`![](${currentSrc})`).then((ok) => ok ? notifyCopySuccess() : notifyCopyFailed("text"));
         }
     }
 
@@ -504,18 +526,27 @@
         menu.append(new MenuItem({
             icon: "iconCopy",
             label: t("copyMarkdown", "复制"),
-            click: () => writeText(`![](${currentSrc})`),
+            click: () => copyPlainText(`![](${currentSrc})`).then((ok) => ok ? notifyCopySuccess() : notifyCopyFailed("text")),
         }).element);
         menu.append(new MenuItem({
             icon: "iconLink",
             label: `${window.siyuan.languages.copy} ${window.siyuan.languages.imageURL}`,
-            click: () => writeText(currentSrc),
+            click: () => copyPlainText(currentSrc).then((ok) => ok ? notifyCopySuccess() : notifyCopyFailed("text")),
         }).element);
-        menu.append(new MenuItem({
-            icon: "iconImage",
-            label: window.siyuan.languages.copyAsPNG,
-            click: () => copyPNGByLink(currentSrc),
-        }).element);
+        if (showCopyPNG) {
+            menu.append(new MenuItem({
+                icon: "iconImage",
+                label: window.siyuan.languages.copyAsPNG,
+                click: () => copyPNGByLink(currentSrc),
+            }).element);
+        }
+        if (showCopyFile) {
+            menu.append(new MenuItem({
+                icon: "iconFile",
+                label: window.siyuan.languages.copyFile || t("copyFile", "复制文件"),
+                click: () => copyAssetFile(currentSrc),
+            }).element);
+        }
         menu.append(new MenuItem({ type: "separator" }).element);
 
         const frontend = getFrontend();
@@ -547,6 +578,26 @@
 
         menu.popup({ x: pos.x, y: pos.y });
         menu.element.style.zIndex = "999999";
+    }
+
+    function copyOverlayText(event: MouseEvent, key: string, text: string) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!text) {
+            return;
+        }
+        copyPlainText(text).then((ok) => {
+            if (ok) {
+                copiedTipKey = key;
+                return;
+            }
+            copiedTipKey = "";
+            notifyCopyFailed("text");
+        });
+    }
+
+    function hideCopyTip() {
+        copiedTipKey = "";
     }
 </script>
 
@@ -605,6 +656,15 @@
             <button type="button" class="ipp-btn" title={t("flipVertical", "垂直翻转", "imageFlipVertical")} on:click|stopPropagation={() => flip("v")} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
                 <svg class="ipp-icon"><use xlink:href="#ippIconFlipV"></use></svg>
             </button>
+            {#if showCopyFile}
+                <button type="button" class="ipp-btn" title={window.siyuan.languages.copyFile || t("copyFile", "复制文件")} on:click|stopPropagation={() => copyAssetFile(currentSrc)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+                    <svg class="ipp-icon"><use xlink:href="#ippIconCopyFile"></use></svg>
+                </button>
+            {:else if showCopyPNG}
+                <button type="button" class="ipp-btn" title={window.siyuan.languages.copyAsPNG || t("copyAsPNG", "复制为 PNG")} on:click|stopPropagation={() => copyPNGByLink(currentSrc)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+                    <svg class="ipp-icon"><use xlink:href="#ippIconCopyPNG"></use></svg>
+                </button>
+            {/if}
         </div>
     {/if}
 
@@ -623,13 +683,38 @@
         </button>
     {/if}
 
-    {#if showOverlayFooter}
-        <div class="ipp-footer">
-            {#if images.length}
-                {currentIndex + 1} / {images.length}
+    {#if showOverlayIndex && images.length}
+        <div class="ipp-index">{currentIndex + 1} / {images.length}</div>
+    {/if}
+
+    {#if showOverlayMeta}
+        <div class="ipp-meta">
+            {#if showOverlayName && showTitle}
+                <span class="ipp-copy" on:pointerleave={hideCopyTip}>
+                    <button
+                        type="button"
+                        class="ipp-copy__text"
+                        on:click|stopPropagation={(event) => copyOverlayText(event, "title", imageTitle)}
+                        on:pointerdown|stopPropagation
+                        on:dblclick|stopPropagation
+                    >{imageTitle}</button>
+                    <span class="ipp-copy__tip">{copiedTipKey === "title" ? t("copiedSuccess", "复制成功") : t("clickToCopy", "点击复制")}</span>
+                </span>
+            {/if}
+            {#if showOverlayName && fileName}
+                <span class="ipp-copy" on:pointerleave={hideCopyTip}>
+                    <button
+                        type="button"
+                        class="ipp-copy__text"
+                        on:click|stopPropagation={(event) => copyOverlayText(event, "name", fileName)}
+                        on:pointerdown|stopPropagation
+                        on:dblclick|stopPropagation
+                    >{fileName}</button>
+                    <span class="ipp-copy__tip">{copiedTipKey === "name" ? t("copiedSuccess", "复制成功") : t("clickToCopy", "点击复制")}</span>
+                </span>
             {/if}
             {#if naturalW && naturalH}
-                <span class="ipp-footer__dim">{naturalW} × {naturalH}</span>
+                <span class="ipp-meta__dim">{naturalW} × {naturalH}</span>
             {/if}
         </div>
     {/if}
@@ -790,28 +875,93 @@
         background: rgba(255, 255, 255, 0.82);
     }
 
-    .ipp-footer {
+    .ipp-index {
+        position: absolute;
+        right: 8px;
+        bottom: 8px;
+        padding: 2px 7px;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.55);
+        color: #fff;
+        font-size: 12px;
+        line-height: 16px;
+        z-index: 2;
+        pointer-events: none;
+        white-space: nowrap;
+    }
+
+    .ipp-meta {
         position: absolute;
         left: 8px;
         bottom: 8px;
         display: flex;
-        align-items: center;
-        gap: 8px;
-        max-width: calc(100% - 16px);
-        padding: 3px 8px;
-        border-radius: 10px;
-        background: rgba(0, 0, 0, 0.7);
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+        max-width: calc(100% - 72px);
+        padding: 4px 8px;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.55);
         color: #fff;
-        font-size: 13px;
+        font-size: 12px;
         line-height: 16px;
         z-index: 2;
         pointer-events: none;
     }
 
-    .ipp-footer__dim {
+    .ipp-copy {
+        position: relative;
+        display: block;
+        max-width: 100%;
+        pointer-events: auto;
+    }
+
+    .ipp-copy__text {
+        appearance: none;
+        display: block;
+        max-width: 100%;
+        border: 0;
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        line-height: inherit;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        cursor: pointer;
+    }
+
+    .ipp-copy__text:hover {
+        text-decoration: underline;
+    }
+
+    .ipp-copy__tip {
+        position: absolute;
+        left: 0;
+        bottom: calc(100% + 6px);
+        padding: 3px 8px;
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.55);
+        color: #fff;
+        font-size: 11px;
+        line-height: 16px;
+        white-space: nowrap;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.12s ease;
+    }
+
+    .ipp-copy:hover .ipp-copy__tip {
+        opacity: 1;
+    }
+
+    .ipp-meta__dim {
         opacity: 0.86;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        max-width: 100%;
     }
 </style>

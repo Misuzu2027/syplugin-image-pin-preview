@@ -1,22 +1,19 @@
 import { EnvConfig } from "@/config/EnvConfig";
-import { Dialog } from "siyuan";
+import { svelteDialog } from "@/libs/dialog";
 import SettingPageSvelte from "@/components/setting/setting-page.svelte";
+import { getSettingDialogSize } from "@/components/setting/setting-dialog";
 
 export function openSettingsDialog() {
-    let isMobile = EnvConfig.ins.isMobile;
-    // 生成Dialog内容
-    const dialogId = "image-pin-preview-setting-" + Date.now();
-    // 创建dialog
-    const settingDialog = new Dialog({
-        title: "图片悬浮预览插件设置",
-        content: `
-            <div  id="${dialogId}" style="overflow: hidden; position: relative;height: 100%;"></div>
-            `,
-        width: isMobile ? "92vw" : "1040px",
-        height: isMobile ? "50vw" : "80vh",
+    const { width, height } = getSettingDialogSize();
+    const { dialog } = svelteDialog({
+        title: EnvConfig.ins.i18n?.settingDialogTitle ?? "图片悬浮预览插件设置",
+        constructor: (container) => {
+            return new SettingPageSvelte({
+                target: container,
+            });
+        },
+        width,
+        height,
     });
-
-    new SettingPageSvelte({
-        target: settingDialog.element.querySelector(`#${dialogId}`),
-    });
+    dialog.element.classList.add("image-pin-preview-setting-dialog");
 }

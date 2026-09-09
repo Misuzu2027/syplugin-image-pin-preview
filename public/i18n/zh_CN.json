@@ -102,6 +102,14 @@
     "copyMarkdown": "复制",
     "toggleButtons": "显示/隐藏按钮",
     "openFileLocation": "打开文件位置",
-    "imageLoadFailed": "图片加载失败"
+    "imageLoadFailed": "图片加载失败",
+    "copyFile": "复制文件",
+    "copyFailed": "复制失败",
+    "copyFileFailed": "复制文件失败",
+    "clipboardUnavailable": "当前页面无法使用剪贴板，请使用 HTTPS 或桌面端",
+    "clickToCopy": "点击复制",
+    "copiedSuccess": "复制成功",
+    "settingDialogTitle": "图片悬浮预览插件设置",
+    "settingLayoutResizerTitle": "拖动调整宽度"
 
 }

@@ -3,7 +3,7 @@ import { SettingService } from "../setting/SettingService";
 import ImagePreviewerSvelte from "@/components/image/ImagePreviewer.svelte";
 import { getCurrentAttrViewImages, getDocImageAssets } from "@/utils/api";
 import { SvelteComponent } from "svelte";
-import { ensureCurrentInList, removeCompressURL } from "@/utils/image-url";
+import { ensureCurrentInList, findImageIndex, removeCompressURL } from "@/utils/image-url";
 
 const HOST_CLASS = "ipp-host";
 const WINDOW_CLASS = "ipp-window";
@@ -98,6 +98,42 @@ function collectDomImageSrcs(root: ParentNode, selector: string): string[] {
     return srcs;
 }
 
+function getEditorImageTitle(image: HTMLImageElement): string {
+    const wrap = image.closest("span.img, span[data-type*='img']");
+    const caption = wrap?.querySelector(".protyle-action__title span")?.textContent?.trim()
+        || wrap?.querySelector(".protyle-action__title")?.textContent?.trim();
+    if (caption) {
+        return caption;
+    }
+    return (image.getAttribute("title") || "").trim();
+}
+
+function collectTitlesBySrc(root: ParentNode = document): Record<string, string> {
+    const titles: Record<string, string> = {};
+    root.querySelectorAll("span.img img, span[data-type*='img'] img").forEach((node) => {
+        if (!(node instanceof HTMLImageElement)) {
+            return;
+        }
+        const src = removeCompressURL(node.getAttribute("src") || "");
+        const title = getEditorImageTitle(node);
+        if (src && title) {
+            titles[src] = title;
+        }
+    });
+    return titles;
+}
+
+function titlesForImageList(images: string[], titleMap: Record<string, string>): string[] {
+    const keys = Object.keys(titleMap);
+    return images.map((src) => {
+        if (titleMap[src]) {
+            return titleMap[src];
+        }
+        const matched = keys.find((key) => findImageIndex([key], src) === 0);
+        return matched ? titleMap[matched] : "";
+    });
+}
+
 function getDocRootId(from: HTMLElement): string {
     const titleId = from.closest(".protyle")?.querySelector(".protyle-title")?.getAttribute("data-node-id");
     if (titleId) {
@@ -175,7 +211,8 @@ async function openFromEditorImage(image: HTMLImageElement, localOnly: boolean) 
     if (!prepared.images.length) {
         return;
     }
-    previewImages(prepared.images, prepared.index);
+    const scope = image.closest(".protyle") || document;
+    previewImages(prepared.images, prepared.index, titlesForImageList(prepared.images, collectTitlesBySrc(scope)));
 }
 
 async function openFromAvImage(image: HTMLImageElement, localOnly: boolean) {
@@ -211,10 +248,10 @@ async function openFromAvImage(image: HTMLImageElement, localOnly: boolean) {
     if (!prepared.images.length) {
         return;
     }
-    previewImages(prepared.images, prepared.index);
+    previewImages(prepared.images, prepared.index, titlesForImageList(prepared.images, collectTitlesBySrc()));
 }
 
-export function previewImages(images: string[], startIndex = 0) {
+export function previewImages(images: string[], startIndex = 0, imageTitles: string[] = []) {
     previewCount++;
     maxZIndex++;
 
@@ -229,6 +266,7 @@ export function previewImages(images: string[], startIndex = 0) {
         target: container,
         props: {
             images,
+            imageTitles,
             startIndex,
             handleCloseClick: closer,
         },

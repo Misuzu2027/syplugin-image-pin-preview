@@ -102,6 +102,14 @@
     "copyMarkdown": "Copy",
     "toggleButtons": "Show/hide buttons",
     "openFileLocation": "Show in folder",
-    "imageLoadFailed": "Failed to load image"
+    "imageLoadFailed": "Failed to load image",
+    "copyFile": "Copy file",
+    "copyFailed": "Copy failed",
+    "copyFileFailed": "Failed to copy file",
+    "clipboardUnavailable": "Clipboard is unavailable on this page. Use HTTPS or the desktop app.",
+    "clickToCopy": "Click to copy",
+    "copiedSuccess": "Copied",
+    "settingDialogTitle": "Image Pin Preview Settings",
+    "settingLayoutResizerTitle": "Drag to resize"
 
 }

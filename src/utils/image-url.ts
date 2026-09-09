@@ -115,12 +115,25 @@ export function ensureCurrentInList(list: string[], current: string): { images: 
     return { images, index };
 }
 
-export function getImageFileName(src: string): string {
+/** 与思源 Viewer 一致：去掉扩展名和资源 ID 后缀 `-\d{14}-\w{7}`。 */
+export function getDisplayImageName(src: string): string {
     if (!src) {
         return "";
     }
-    const normalized = normalizeImageSrc(src);
-    const path = normalized.split(/[?#]/, 1)[0];
-    const name = path.substring(path.lastIndexOf("/") + 1);
-    return name.replace(/-\d{14}-\w{7}(?=\.)/, "");
+    let name = "";
+    try {
+        const path = decodeURIComponent(normalizeImageSrc(src).split(/[?#]/, 1)[0]);
+        name = path.substring(path.lastIndexOf("/") + 1);
+    } catch {
+        name = src.substring(src.lastIndexOf("/") + 1).split(/[?#]/, 1)[0];
+    }
+    const dot = name.lastIndexOf(".");
+    if (dot > 0) {
+        name = name.substring(0, dot);
+    }
+    return name.replace(/-\d{14}-\w{7}$/, "");
+}
+
+export function getImageFileName(src: string): string {
+    return getDisplayImageName(src);
 }

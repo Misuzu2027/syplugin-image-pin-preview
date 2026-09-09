@@ -5,7 +5,7 @@
 </script>
 
 <div
-  class="fn__flex b3-label config__item"
+  class="setting-item fn__flex b3-label config__item"
   style={itemProperty.type == "checkbox" ? "flex-wrap:wrap;" : ""}
 >
   <div class="fn__flex-1 fn__flex-center" style="font-size:110%">

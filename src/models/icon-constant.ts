@@ -39,6 +39,12 @@ export const IPP_ICON_SVG = `
 <symbol id="ippIconClose" viewBox="0 0 24 24">
     <path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12 19 6.4 17.6 5 12 10.6 6.4 5z"></path>
 </symbol>
+<symbol id="ippIconCopyFile" viewBox="0 0 24 24">
+    <path d="M7 3h7l5 5v13H7V3zm7 1.8V9h4.2L14 4.8zM9 12h6v1.6H9V12zm0 3.2h6V17H9v-1.8z"></path>
+</symbol>
+<symbol id="ippIconCopyPNG" viewBox="0 0 24 24">
+    <path d="M5 5h14v14H5V5zm2 10.2 2.6-3.3 2.1 2.5 1.7-2.1L17 15.2H7zM8.6 8.4a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4z"></path>
+</symbol>
 `;
 
 export const CUSTOM_ICON_MAP = {

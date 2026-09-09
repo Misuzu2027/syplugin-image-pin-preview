@@ -4,3 +4,21 @@
     pointer-events: none;
     z-index: 99999;
 }
+
+.image-pin-preview-setting-dialog .b3-dialog__body {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.image-pin-preview-setting-dialog .dialog-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+}
+
+@media (max-width: 640px) {
+    .image-pin-preview-setting-dialog .b3-dialog__container {
+        max-width: 92vw;
+    }
+}
