@@ -19,11 +19,9 @@ export default class PluginSample extends Plugin {
         await SettingService.ins.init();
         ImageService.ins.init();
 
-        // 图标的制作参见帮助文档
         for (const key in CUSTOM_ICON_MAP) {
             if (Object.prototype.hasOwnProperty.call(CUSTOM_ICON_MAP, key)) {
-                const item = CUSTOM_ICON_MAP[key];
-                this.addIcons(item.source);
+                this.addIcons(CUSTOM_ICON_MAP[key].source);
             }
         }
 
@@ -48,6 +46,7 @@ export default class PluginSample extends Plugin {
     }
 
     async onunload() {
+        ImageService.ins.destroy();
     }
 
     uninstall() {

@@ -1,10 +1,21 @@
+# Image Pin Preview
 
-# 图片悬浮预览
+Double-click images in the editor, or click images in a database, to pin the image itself above the page. Multiple images can stay pinned while you keep editing.
 
-双击文档中的图片，让图片悬浮预览。仅支持编辑器内的图片，不支持数据库中的图片。
+## Features
 
+* Replaces the native editor double-click preview and database asset-column click preview
+* The image floats on its own; zoom changes the image size
+* Switching fits the whole image on screen and keeps the center
+* Zoom, actual size, fit
+* Rotate and flip
+* Drag to move the image
+* Mouse wheel to zoom; `Ctrl` / `Shift` + wheel to pan
 
-## 一些技巧
+## Tips
 
-* 如果不想查看所有图片，可以按紧 `Ctrl+双击` ，图片范围仅当前编辑器加载的图片。
-* 预览图片时，光标在图片上方，按紧 `Ctrl` 或 `Shfit` 配合滚轮，可以垂直或水品移动图片。
+* Hold `Ctrl` when opening to preview only images already loaded in the current editor or database view
+* `Esc` closes; `←` `→` or `A` `D` switches images
+* `R` / `L` rotate, `H` / `V` flip, `0` fit, `1` actual size
+* Double-click the image to toggle fit and the last zoom
+* Right-click for copy, export, reveal in folder, and button visibility

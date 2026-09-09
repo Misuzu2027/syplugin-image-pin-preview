@@ -181,7 +181,23 @@ export async function getDocImageAssets(id: string): Promise<string[]> {
         id: id,
     };
     let url = 'api/asset/getDocImageAssets';
-    return request(url, data);
+    const result = await request(url, data);
+    return Array.isArray(result) ? result : [];
+}
+
+export async function getCurrentAttrViewImages(
+    id: string,
+    blockID: string,
+    viewID: string,
+    query: string,
+): Promise<string[]> {
+    const result = await request("/api/av/getCurrentAttrViewImages", {
+        id,
+        blockID,
+        viewID,
+        query,
+    });
+    return Array.isArray(result) ? result : [];
 }
 
 

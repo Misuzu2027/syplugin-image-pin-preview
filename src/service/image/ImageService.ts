@@ -1,208 +1,218 @@
-import { EnvConfig } from "@/config/EnvConfig";
 import Instance from "@/utils/Instance";
 import { SettingService } from "../setting/SettingService";
-import ImagePreviewerSvelte from "@/components/image/ImagePreviewer.svelte"
-import { isStrNotBlank } from "@/utils/string-util";
-import { getDocImageAssets } from "@/utils/api";
-import { hasClosestBySelector, stringToElement } from "@/utils/html-util";
+import ImagePreviewerSvelte from "@/components/image/ImagePreviewer.svelte";
+import { getCurrentAttrViewImages, getDocImageAssets } from "@/utils/api";
 import { SvelteComponent } from "svelte";
+import { ensureCurrentInList, removeCompressURL } from "@/utils/image-url";
+
+const HOST_CLASS = "ipp-host";
+const WINDOW_CLASS = "ipp-window";
+const AV_IMAGE_SELECTOR = "img.av__cellassetimg";
+const EDITOR_IMAGE_SPAN = `span[data-type*="img"].img`;
+const EDITOR_IMAGE_SELECTOR = `${EDITOR_IMAGE_SPAN} img`;
+const EDITOR_SCOPE_IMAGE_SELECTOR = `${EDITOR_IMAGE_SELECTOR}, .protyle-wysiwyg img:not(.emoji):not(.av__cellassetimg), .protyle-preview img:not(.emoji)`;
+const OPEN_DEBOUNCE_MS = 400;
 
 export class ImageService {
-
     public static get ins(): ImageService {
         return Instance.get(ImageService);
     }
 
     init() {
-        let plugin = EnvConfig.ins.plugin;
-        initBusEvent();
+        bindPreviewEvents();
+    }
 
+    destroy() {
+        unbindPreviewEvents();
+        closeAllPreviews();
     }
 }
 
-
-function initBusEvent() {
-
-
-    EnvConfig.ins.plugin.eventBus.off("loaded-protyle-static", handleLoadedProtyle);
-    EnvConfig.ins.plugin.eventBus.off("loaded-protyle-dynamic", handleLoadedProtyle);
-    EnvConfig.ins.plugin.eventBus.off("ws-main", handleWsMain);
-
-
-    EnvConfig.ins.plugin.eventBus.on("loaded-protyle-static", handleLoadedProtyle);
-    EnvConfig.ins.plugin.eventBus.on("loaded-protyle-dynamic", handleLoadedProtyle);
-    EnvConfig.ins.plugin.eventBus.on("ws-main", handleWsMain);
-
-    // EnvConfig.ins.plugin.eventBus.on("misuzu2027-", handleLoadedProtyle);
-
-}
-
-
-function handleLoadedProtyle(e) {
-    // console.log("handleLoadedProtyle ", e)
-    // let protyleElement = e.detail.protyle.element;
-    // addObserveCodeBlockLanguageElement(protyleElement);
-    let wysiwygElement = e.detail.protyle.wysiwyg.element;
-    initProtyleElement(wysiwygElement,);
-
-
-}
-
-
-function handleWsMain(e) {
-    if (e.detail.cmd != "transactions"
-        || !e.detail.data
-    ) {
-        return;
-    }
-    // console.log("handleWsMain ", e)
-
-    let existUpdateImg = false;
-
-    for (const dataObj of e.detail.data) {
-        if (!dataObj || !dataObj.doOperations) {
-            continue;
-        }
-        for (const doOperation of dataObj.doOperations) {
-            if (doOperation && (doOperation.action == "update" || doOperation.action == "insert")) {
-                let operationElement = stringToElement(doOperation.data);
-                if (operationElement && operationElement.querySelectorAll(`span[data-type*="img"].img img`)) {
-                    existUpdateImg = true;
-                    break;
-                }
-            }
-        }
-    }
-    if (!existUpdateImg) {
-        return;
-    }
-    setTimeout(() => {
-        initImgElementList(document.querySelectorAll(`span[data-type*="img"].img img`));
-    }, 100);
-
-}
-
-
-
-
-function initProtyleElement(protyleContentElement: HTMLElement) {
-    let imgElementArray = protyleContentElement.querySelectorAll(`span[data-type*="img"].img img`);
-    initImgElementList(imgElementArray);
-
-    // setTimeout(() => {
-    //     let avImgElementArray = protyleContentElement.querySelectorAll(`div.av__cell img.av__cellassetimg`);
-    //     console.log("avImgElementArray ", avImgElementArray)
-    //     initAvImgElementList(avImgElementArray);
-    // }, 1000);
-
-}
-const IMG_ATTR_NAME = "misuzu2027-img-pin-dbl";
+let eventsBound = false;
 let maxZIndex = 99999;
 let previewCount = 0;
+const previewClosers = new Set<() => void>();
+let lastOpenKey = "";
+let lastOpenAt = 0;
 
-function initImgElementList(imgElements: NodeListOf<Element>) {
-    if (!imgElements) return;
-
-    imgElements.forEach(imgElement => {
-        if (isStrNotBlank(imgElement.getAttribute(IMG_ATTR_NAME))) return;
-
-        imgElement.setAttribute(IMG_ATTR_NAME, "1");
-        imgElement.addEventListener("dblclick", handleImageDoubleClick);
-    });
-}
-
-
-async function handleImageDoubleClick(event: MouseEvent) {
-    if (!SettingService.ins.SettingConfig.isOpen) {
+function bindPreviewEvents() {
+    if (eventsBound) {
         return;
     }
-    event.stopPropagation();
+    eventsBound = true;
+    document.addEventListener("click", handleCaptureClick, true);
+    document.addEventListener("dblclick", handleCaptureDblClick, true);
+}
 
-    const { target } = event;
-    if (!(target instanceof HTMLElement)) return;
-
-    let imgAssets: string[] = [];
-    let imgIndex = 0;
-
-    if (event.ctrlKey) {
-        let imgRes = getImagesFromWysiwyg(target, `span[data-type*="img"].img img`);
-        imgAssets = imgRes.imgAssets;
-        imgIndex = imgRes.imgIndex;
-    } else {
-        let imgRes = await getImagesFromDoc(target);
-        imgAssets = imgRes.imgAssets;
-        imgIndex = imgRes.imgIndex;
+function unbindPreviewEvents() {
+    if (!eventsBound) {
+        return;
     }
-
-    if (imgAssets.length === 0) return;
-
-    // console.log("imgAssets ", imgAssets, " ,imgIndex ", imgIndex);
-    previewImages(imgAssets, imgIndex);
+    eventsBound = false;
+    document.removeEventListener("click", handleCaptureClick, true);
+    document.removeEventListener("dblclick", handleCaptureDblClick, true);
 }
 
-function initAvImgElementList(imgElements: NodeListOf<Element>) {
-    if (!imgElements) return;
-
-    imgElements.forEach(imgElement => {
-        if (isStrNotBlank(imgElement.getAttribute(IMG_ATTR_NAME))) return;
-
-        imgElement.setAttribute(IMG_ATTR_NAME, "1");
-        imgElement.addEventListener("click", handleImageClick);
-    });
+function isPluginOpen(): boolean {
+    return !!SettingService.ins.SettingConfig?.isOpen;
 }
 
+function isInsidePreviewer(target: EventTarget | null): boolean {
+    return target instanceof Element && !!target.closest(`.${WINDOW_CLASS}, .${HOST_CLASS}`);
+}
 
-async function handleImageClick(event: MouseEvent) {
-
-    const { target } = event;
-    if (!(target instanceof HTMLElement)) return;
-
-    let imgAssets: string[] = [];
-    let imgIndex = 0;
-
-    if (event.ctrlKey) {
-        event.stopPropagation();
-        let imgRes = getImagesFromWysiwyg(target, `div.av__cell img.av__cellassetimg`);
-        imgAssets = imgRes.imgAssets;
-        imgIndex = imgRes.imgIndex;
+function asImageElement(target: EventTarget | null): HTMLImageElement | null {
+    if (!(target instanceof Element)) {
+        return null;
     }
-    if (imgAssets.length === 0) return;
-
-    console.log("imgAssets ", imgAssets, " ,imgIndex ", imgIndex);
-    previewImages(imgAssets, imgIndex);
+    const image = target instanceof HTMLImageElement ? target : target.closest("img");
+    if (!image || image.classList.contains("emoji")) {
+        return null;
+    }
+    return image;
 }
 
+function isAvAssetImage(image: HTMLImageElement): boolean {
+    return image.classList.contains("av__cellassetimg");
+}
 
+function isEditorContentImage(image: HTMLImageElement): boolean {
+    if (isAvAssetImage(image) || image.classList.contains("emoji")) {
+        return false;
+    }
+    return !!(image.closest(".protyle-wysiwyg") || image.closest(".protyle-preview") || image.closest(EDITOR_IMAGE_SPAN));
+}
 
-function getImagesFromWysiwyg(target: HTMLElement, selectorText: string): { imgAssets: string[], imgIndex: number } {
-    const wysiwygElement = hasClosestBySelector(target, ".protyle-wysiwyg", true);
-    let result = { imgAssets: [], imgIndex: -1 }
-    if (!wysiwygElement) return result;;
+function isPreviewModeImage(image: HTMLImageElement): boolean {
+    return !isAvAssetImage(image) && !!image.closest(".protyle-preview");
+}
 
-    const imgElements = wysiwygElement.querySelectorAll(selectorText);
-    let index = 0;
-    for (const imgElement of imgElements) {
-        result.imgAssets.push(imgElement.getAttribute("src"));
-        if (target == imgElement) {
-            result.imgIndex = index;
+function collectDomImageSrcs(root: ParentNode, selector: string): string[] {
+    const srcs: string[] = [];
+    root.querySelectorAll(selector).forEach((node) => {
+        const src = removeCompressURL(node.getAttribute("src") || "");
+        if (src) {
+            srcs.push(src);
         }
-        index++;
+    });
+    return srcs;
+}
+
+function getDocRootId(from: HTMLElement): string {
+    const titleId = from.closest(".protyle")?.querySelector(".protyle-title")?.getAttribute("data-node-id");
+    if (titleId) {
+        return titleId;
     }
-    return result;
+    return from.closest("[data-node-id]")?.getAttribute("data-node-id") || "";
 }
 
-async function getImagesFromDoc(target: HTMLElement): Promise<{ imgAssets: string[], imgIndex: number }> {
-    const blockElement = hasClosestBySelector(target, "[data-node-id][data-type]");
-    let result = { imgAssets: [], imgIndex: -1 }
-    if (!blockElement) return result;
-    const imgSrc = target.getAttribute("src");
-
-    const blockId = blockElement.getAttribute("data-node-id");
-    result.imgAssets = await getDocImageAssets(blockId)
-    result.imgIndex = result.imgAssets.indexOf(imgSrc)
-    return result;
+function shouldOpenPreview(key: string): boolean {
+    const now = Date.now();
+    if (key && key === lastOpenKey && now - lastOpenAt < OPEN_DEBOUNCE_MS) {
+        return false;
+    }
+    lastOpenKey = key;
+    lastOpenAt = now;
+    return true;
 }
 
+async function handleCaptureClick(event: MouseEvent) {
+    if (!isPluginOpen() || event.button !== 0 || isInsidePreviewer(event.target)) {
+        return;
+    }
+    const image = asImageElement(event.target);
+    if (!image) {
+        return;
+    }
+    if (isAvAssetImage(image) || isPreviewModeImage(image)) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        if (isAvAssetImage(image)) {
+            await openFromAvImage(image, event.ctrlKey || event.metaKey);
+        } else {
+            await openFromEditorImage(image, event.ctrlKey || event.metaKey);
+        }
+    }
+}
+
+async function handleCaptureDblClick(event: MouseEvent) {
+    if (!isPluginOpen() || isInsidePreviewer(event.target)) {
+        return;
+    }
+    const image = asImageElement(event.target);
+    if (!image || !isEditorContentImage(image) || isPreviewModeImage(image)) {
+        return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    await openFromEditorImage(image, event.ctrlKey || event.metaKey);
+}
+
+async function openFromEditorImage(image: HTMLImageElement, localOnly: boolean) {
+    const currentSrc = removeCompressURL(image.getAttribute("src") || "");
+    if (!currentSrc || !shouldOpenPreview(`editor:${currentSrc}`)) {
+        return;
+    }
+
+    let images: string[] = [];
+    if (localOnly) {
+        const scope = image.closest(".protyle-wysiwyg") || image.closest(".protyle-preview") || document;
+        images = collectDomImageSrcs(scope, EDITOR_SCOPE_IMAGE_SELECTOR);
+    } else {
+        const docId = getDocRootId(image);
+        if (docId) {
+            images = await getDocImageAssets(docId);
+        }
+        if (!images.length) {
+            const scope = image.closest(".protyle-wysiwyg") || image.closest(".protyle-preview") || document;
+            images = collectDomImageSrcs(scope, EDITOR_SCOPE_IMAGE_SELECTOR);
+        }
+    }
+
+    const prepared = ensureCurrentInList(images, currentSrc);
+    if (!prepared.images.length) {
+        return;
+    }
+    previewImages(prepared.images, prepared.index);
+}
+
+async function openFromAvImage(image: HTMLImageElement, localOnly: boolean) {
+    const currentSrc = removeCompressURL(image.getAttribute("src") || "");
+    if (!currentSrc || !shouldOpenPreview(`av:${currentSrc}`)) {
+        return;
+    }
+
+    const avBlock = image.closest("[data-av-id][data-node-id]") as HTMLElement | null;
+    const attrValue = image.closest(".custom-attr__avvalue") as HTMLElement | null;
+    let images: string[] = [];
+
+    if (localOnly || !avBlock) {
+        const scope = avBlock || attrValue || image.parentElement || document;
+        images = collectDomImageSrcs(scope, AV_IMAGE_SELECTOR);
+    } else {
+        try {
+            images = await getCurrentAttrViewImages(
+                avBlock.getAttribute("data-av-id") || "",
+                avBlock.getAttribute("data-node-id") || "",
+                avBlock.getAttribute("custom-sy-av-view") || "",
+                avBlock.querySelector('[data-type="av-search"]')?.textContent?.trim() || "",
+            );
+        } catch {
+            images = [];
+        }
+        if (!images.length) {
+            images = collectDomImageSrcs(avBlock, AV_IMAGE_SELECTOR);
+        }
+    }
+
+    const prepared = ensureCurrentInList(images, currentSrc);
+    if (!prepared.images.length) {
+        return;
+    }
+    previewImages(prepared.images, prepared.index);
+}
 
 export function previewImages(images: string[], startIndex = 0) {
     previewCount++;
@@ -211,42 +221,49 @@ export function previewImages(images: string[], startIndex = 0) {
     const container = createPreviewContainer();
     container.addEventListener("mousedown", handleContainerMouseDown);
 
-    const imagePreviewerSvelte = new ImagePreviewerSvelte({
+    let imagePreviewerSvelte: SvelteComponent;
+    const closer = () => closeImagePreview(imagePreviewerSvelte, container, closer);
+    previewClosers.add(closer);
+
+    imagePreviewerSvelte = new ImagePreviewerSvelte({
         target: container,
         props: {
             images,
             startIndex,
-            handleCloseClick: () => closeImagePreview(imagePreviewerSvelte, container)
-        }
+            handleCloseClick: closer,
+        },
     });
 }
 
 function createPreviewContainer(): HTMLElement {
-    const container = document.createElement('div');
-    container.style.position = 'fixed';
+    const container = document.createElement("div");
+    container.className = HOST_CLASS;
     container.style.zIndex = String(maxZIndex);
-    container.style.pointerEvents = "none";
     document.body.appendChild(container);
     return container;
 }
 
 function handleContainerMouseDown(event: MouseEvent) {
-    const divElement = event.currentTarget as HTMLElement;
-    let curZIndex = Number(window.getComputedStyle(divElement).zIndex);
-    if (curZIndex === maxZIndex) return;
-
+    const host = event.currentTarget as HTMLElement;
+    const curZIndex = Number(window.getComputedStyle(host).zIndex);
+    if (curZIndex === maxZIndex) {
+        return;
+    }
     maxZIndex++;
-    divElement.style.zIndex = String(maxZIndex);
+    host.style.zIndex = String(maxZIndex);
 }
 
-function closeImagePreview(imagePreviewerSvelte: SvelteComponent, container: HTMLElement) {
-    console.log("closeImagePreview")
+function closeImagePreview(imagePreviewerSvelte: SvelteComponent, container: HTMLElement, closer: () => void) {
+    previewClosers.delete(closer);
     imagePreviewerSvelte?.$destroy();
     container.remove();
     previewCount--;
-
     if (previewCount <= 0) {
         previewCount = 0;
         maxZIndex = 99999;
     }
+}
+
+function closeAllPreviews() {
+    [...previewClosers].forEach((close) => close());
 }

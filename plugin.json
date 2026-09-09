@@ -2,7 +2,7 @@
   "name": "syplugin-image-pin-preview",
   "author": "Misuzu2027",
   "url": "https://github.com/Misuzu2027/syplugin-image-pin-preview",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "minAppVersion": "3.0.12",
   "backends": [
     "windows",
@@ -21,20 +21,29 @@
     "desktop-window"
   ],
   "displayName": {
+    "default": "Image Pin Preview",
     "en_US": "Image Pin Preview",
     "zh_CN": "图片悬浮预览"
   },
   "description": {
-    "en_US": "替代原生图片查看功能，让图片支持悬浮预览",
-    "zh_CN": "替代原生图片查看功能，让图片支持悬浮预览"
+    "default": "Replace the native image viewer with a floating pin preview, including database images.",
+    "en_US": "Replace the native image viewer with a floating pin preview, including database images.",
+    "zh_CN": "替代原生图片查看功能，支持文档和数据库图片的悬浮预览"
   },
   "readme": {
+    "default": "README.md",
+    "en_US": "README.md",
     "zh_CN": "README_zh_CN.md"
   },
-  "funding": {
-    "custom": [
-      ""
-    ]
-  },
-  "keywords": []
+  "icon": "icon.png",
+  "preview": "preview.png",
+  "keywords": [
+    "image",
+    "preview",
+    "pin",
+    "float",
+    "图片",
+    "预览",
+    "悬浮"
+  ]
 }
