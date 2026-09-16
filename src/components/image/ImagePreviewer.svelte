@@ -7,20 +7,22 @@
     import { getFrontend } from "siyuan";
     import { onMount, onDestroy } from "svelte";
     import {
-        getDistance,
         getEventPosition,
-        getTouchCenterPosition,
         Vector2,
     } from "@/utils/position-util";
     import {
+        averagePoints,
         clampDisplayScale,
         clampFloatPosition,
         containFloatInViewport,
+        distanceBetween,
         getViewportContainScale,
         getViewportFitScale,
         getVisualSize,
         imageFlipCss,
         keepCenter,
+        pickPinchFocalPoints,
+        pinchZoomKeepFocal,
         switchDisplayScale,
         zoomKeepPoint,
     } from "@/service/image/ImagePreviewerService";
@@ -64,12 +66,17 @@
     let lastTapTime = 0;
 
     let isDragging = false;
+    let dragPointerId: number | null = null;
     let dragStartPos: Vector2 = { x: 0, y: 0 };
     let dragOrigin: Vector2 = { x: 0, y: 0 };
     let isPinching = false;
     let pinchStartDistance = 0;
     let pinchStartScale = 1;
-    let pinchStartRect: DOMRect | null = null;
+    let pinchStartRect: { left: number; top: number; width: number; height: number } | null = null;
+    let pinchStartFocal: Vector2 | null = null;
+    let pinchTouchIds: [number, number] | null = null;
+    let pinchFocalIds: number[] = [];
+    const imageTouchIds = new Set<number>();
     let longPressTimeout: ReturnType<typeof setTimeout>;
 
     let floatEl: HTMLElement;
@@ -98,6 +105,10 @@
         window.addEventListener("pointermove", handlePointerMove);
         window.addEventListener("pointerup", handlePointerUp);
         window.addEventListener("pointercancel", handlePointerUp);
+        window.addEventListener("touchstart", handleWindowTouchStart, { capture: true, passive: false });
+        window.addEventListener("touchmove", handleWindowTouchMove, { capture: true, passive: false });
+        window.addEventListener("touchend", handleWindowTouchEnd, { capture: true, passive: false });
+        window.addEventListener("touchcancel", handleWindowTouchEnd, { capture: true, passive: false });
         floatEl?.addEventListener("wheel", handleWheel, { passive: false });
         floatEl?.addEventListener("keydown", handleKeydown);
         openCurrent(true);
@@ -107,6 +118,10 @@
         window.removeEventListener("pointermove", handlePointerMove);
         window.removeEventListener("pointerup", handlePointerUp);
         window.removeEventListener("pointercancel", handlePointerUp);
+        window.removeEventListener("touchstart", handleWindowTouchStart, true);
+        window.removeEventListener("touchmove", handleWindowTouchMove, true);
+        window.removeEventListener("touchend", handleWindowTouchEnd, true);
+        window.removeEventListener("touchcancel", handleWindowTouchEnd, true);
         floatEl?.removeEventListener("wheel", handleWheel);
         floatEl?.removeEventListener("keydown", handleKeydown);
         clearTimeout(longPressTimeout);
@@ -291,6 +306,120 @@
         setScale(displayScale * factor, { x: event.clientX, y: event.clientY });
     }
 
+    function pointerPos(event: PointerEvent): Vector2 {
+        return { x: event.clientX, y: event.clientY };
+    }
+
+    function currentFloatRect() {
+        return {
+            left: position.x,
+            top: position.y,
+            width: visual.width,
+            height: visual.height,
+        };
+    }
+
+    function isOnFloat(target: EventTarget | null) {
+        return !!(floatEl && target instanceof Node && floatEl.contains(target));
+    }
+
+    function ownsTouchGesture() {
+        return imageTouchIds.size > 0 || isDragging || isPinching;
+    }
+
+    function touchesToPoints(touches: TouchList) {
+        const points: { id: number; x: number; y: number }[] = [];
+        for (let i = 0; i < touches.length; i++) {
+            points.push({
+                id: touches[i].identifier,
+                x: touches[i].clientX,
+                y: touches[i].clientY,
+            });
+        }
+        return points;
+    }
+
+    function pickPinchTouchPair(touches: TouchList) {
+        const points = touchesToPoints(touches);
+        if (points.length < 2) {
+            return null;
+        }
+        const onImage = points.filter((point) => imageTouchIds.has(point.id));
+        const first = onImage[0] || points[0];
+        const second = points.find((point) => point.id !== first.id);
+        if (!second) {
+            return null;
+        }
+        return [first, second] as const;
+    }
+
+    function beginPinchFromTouches(touches: TouchList) {
+        const pair = pickPinchTouchPair(touches);
+        if (!pair) {
+            return;
+        }
+        const [first, second] = pair;
+        const rect = currentFloatRect();
+        const focalPoints = pickPinchFocalPoints([first, second], rect);
+        pinchTouchIds = [first.id, second.id];
+        pinchFocalIds = focalPoints.map((point) => point.id);
+        pinchStartFocal = averagePoints(focalPoints);
+        pinchStartDistance = distanceBetween(first, second);
+        pinchStartScale = displayScale;
+        pinchStartRect = rect;
+        isPinching = true;
+        isDragging = false;
+        dragPointerId = null;
+        clearTimeout(longPressTimeout);
+    }
+
+    function updatePinchFromTouches(touches: TouchList) {
+        if (!pinchTouchIds || !pinchStartRect || !pinchStartFocal) {
+            return;
+        }
+        const points = touchesToPoints(touches);
+        const first = points.find((point) => point.id === pinchTouchIds[0]);
+        const second = points.find((point) => point.id === pinchTouchIds[1]);
+        if (!first || !second) {
+            return;
+        }
+        const focalPoints = pinchFocalIds
+            .map((id) => points.find((point) => point.id === id))
+            .filter((point): point is { id: number; x: number; y: number } => !!point);
+        const currentFocal = averagePoints(focalPoints.length ? focalPoints : [first, second]);
+        const nextScale = clampDisplayScale(
+            pinchStartScale * (distanceBetween(first, second) / (pinchStartDistance || 1)),
+            naturalW,
+            MIN_WIDTH,
+        );
+        const nextSize = getVisualSize(naturalW, naturalH, nextScale, rotate);
+        const next = pinchZoomKeepFocal(
+            pinchStartRect,
+            pinchStartFocal,
+            currentFocal,
+            nextSize.width,
+            nextSize.height,
+        );
+        position = clampFloatPosition(next.x, next.y, nextSize.width, nextSize.height);
+        displayScale = nextScale;
+        lastCustomScale = nextScale;
+    }
+
+    function endPinch() {
+        isPinching = false;
+        pinchTouchIds = null;
+        pinchStartRect = null;
+        pinchStartFocal = null;
+        pinchFocalIds = [];
+    }
+
+    function resumeDragFromTouch(touch: Touch) {
+        isDragging = true;
+        dragPointerId = null;
+        dragStartPos = { x: touch.clientX, y: touch.clientY };
+        dragOrigin = { ...position };
+    }
+
     function handlePointerDown(event: PointerEvent) {
         if (event.button !== 0 && event.button !== 1) {
             return;
@@ -298,8 +427,11 @@
         if ((event.target as HTMLElement).closest("button")) {
             return;
         }
+        if (isPinching || (dragPointerId !== null && event.pointerId !== dragPointerId)) {
+            return;
+        }
         window.siyuan?.menus?.menu?.remove();
-        const pos = getEventPosition(event);
+        const pos = pointerPos(event);
         const now = Date.now();
         if (now - lastTapTime < DOUBLE_TAP_THRESHOLD && event.button === 0) {
             toggleFitOrActual(pos);
@@ -311,6 +443,7 @@
             event.preventDefault();
         }
         isDragging = true;
+        dragPointerId = event.pointerId;
         dragStartPos = pos;
         dragOrigin = { ...position };
     }
@@ -319,73 +452,120 @@
         if (!isDragging || isPinching) {
             return;
         }
-        const pos = getEventPosition(event);
+        if (dragPointerId !== null && event.pointerId !== dragPointerId) {
+            return;
+        }
+        const pos = pointerPos(event);
         applyPosition({
             x: dragOrigin.x + pos.x - dragStartPos.x,
             y: dragOrigin.y + pos.y - dragStartPos.y,
         });
     }
 
-    function handlePointerUp() {
+    function handlePointerUp(event: PointerEvent) {
+        if (isPinching || dragPointerId === null || event.pointerId !== dragPointerId) {
+            return;
+        }
         isDragging = false;
+        dragPointerId = null;
+    }
+
+    function handleWindowTouchStart(event: TouchEvent) {
+        if (isOnFloat(event.target)) {
+            for (let i = 0; i < event.changedTouches.length; i++) {
+                imageTouchIds.add(event.changedTouches[i].identifier);
+            }
+            window.siyuan?.menus?.menu?.remove();
+            if (event.touches.length === 1) {
+                const pos = getEventPosition(event);
+                longPressTimeout = setTimeout(() => {
+                    isDragging = false;
+                    dragPointerId = null;
+                    openContextMenu(pos);
+                }, LONG_PRESS_MS);
+            } else {
+                clearTimeout(longPressTimeout);
+            }
+        }
+        if (event.touches.length >= 2 && ownsTouchGesture()) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!isPinching) {
+                beginPinchFromTouches(event.touches);
+            }
+        }
+    }
+
+    function handleWindowTouchMove(event: TouchEvent) {
+        if (ownsTouchGesture()) {
+            clearTimeout(longPressTimeout);
+        }
+        if (event.touches.length >= 2 && ownsTouchGesture()) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!isPinching) {
+                beginPinchFromTouches(event.touches);
+            }
+            updatePinchFromTouches(event.touches);
+            return;
+        }
+        if (isDragging && event.touches.length === 1 && dragPointerId === null) {
+            event.preventDefault();
+            const touch = event.touches[0];
+            applyPosition({
+                x: dragOrigin.x + touch.clientX - dragStartPos.x,
+                y: dragOrigin.y + touch.clientY - dragStartPos.y,
+            });
+            return;
+        }
+        if (isDragging && imageTouchIds.size > 0) {
+            event.preventDefault();
+        }
+    }
+
+    function handleWindowTouchEnd(event: TouchEvent) {
+        for (let i = 0; i < event.changedTouches.length; i++) {
+            imageTouchIds.delete(event.changedTouches[i].identifier);
+        }
+        clearTimeout(longPressTimeout);
+        if (isPinching) {
+            const ids = pinchTouchIds;
+            const pinchAlive = !!(
+                ids
+                && [...event.touches].some((touch) => touch.identifier === ids[0])
+                && [...event.touches].some((touch) => touch.identifier === ids[1])
+            );
+            if (!pinchAlive) {
+                if (event.touches.length >= 2) {
+                    beginPinchFromTouches(event.touches);
+                } else {
+                    endPinch();
+                    const remaining = event.touches[0];
+                    if (remaining && imageTouchIds.has(remaining.identifier)) {
+                        resumeDragFromTouch(remaining);
+                    }
+                }
+            }
+        }
+        if (event.touches.length === 0) {
+            imageTouchIds.clear();
+            isDragging = false;
+            dragPointerId = null;
+        }
     }
 
     function handleTouchStart(event: TouchEvent) {
         window.siyuan?.menus?.menu?.remove();
-        if (event.touches.length === 2) {
-            event.preventDefault();
-            isPinching = true;
-            isDragging = false;
-            pinchStartDistance = getDistance(event.touches);
-            pinchStartScale = displayScale;
-            pinchStartRect = floatEl.getBoundingClientRect();
+        if (event.touches.length >= 2) {
             clearTimeout(longPressTimeout);
-            return;
-        }
-        if (event.touches.length === 1) {
-            const pos = getEventPosition(event);
-            longPressTimeout = setTimeout(() => {
-                isDragging = false;
-                openContextMenu(pos);
-            }, LONG_PRESS_MS);
         }
     }
 
-    function handleTouchMove(event: TouchEvent) {
-        if (isPinching && event.touches.length === 2) {
-            event.preventDefault();
-            clearTimeout(longPressTimeout);
-            const currentDistance = getDistance(event.touches);
-            const center = getTouchCenterPosition(event.touches);
-            const nextScale = pinchStartScale * (currentDistance / (pinchStartDistance || 1));
-            if (center && pinchStartRect) {
-                const nextSize = getVisualSize(
-                    naturalW,
-                    naturalH,
-                    clampDisplayScale(nextScale, naturalW, MIN_WIDTH),
-                    rotate,
-                );
-                position = clampFloatPosition(
-                    zoomKeepPoint(pinchStartRect, nextSize.width, nextSize.height, center).x,
-                    zoomKeepPoint(pinchStartRect, nextSize.width, nextSize.height, center).y,
-                    nextSize.width,
-                    nextSize.height,
-                );
-                displayScale = clampDisplayScale(nextScale, naturalW, MIN_WIDTH);
-                lastCustomScale = displayScale;
-            } else {
-                setScale(nextScale);
-            }
-            return;
-        }
+    function handleTouchMove() {
         clearTimeout(longPressTimeout);
     }
 
-    function handleTouchEnd(event: TouchEvent) {
-        if (event.touches.length < 2) {
-            isPinching = false;
-            pinchStartRect = null;
-        }
+    function handleTouchEnd() {
         clearTimeout(longPressTimeout);
     }
 

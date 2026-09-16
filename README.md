@@ -11,6 +11,7 @@ Double-click images in the editor, or click images in a database, to pin the ima
 * Rotate and flip
 * Drag to move the image
 * Mouse wheel to zoom; `Ctrl` / `Shift` + wheel to pan
+* On mobile, pinch to zoom; one finger can stay on the image while the other is outside it
 * Shows the image title and file name; click to copy
 * Copy file or copy as PNG from the toolbar or context menu
 

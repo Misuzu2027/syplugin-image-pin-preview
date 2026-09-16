@@ -34,7 +34,7 @@ export function clampDisplayScale(scale: number, naturalWidth: number, minWidth 
 }
 
 export function zoomKeepPoint(
-    oldRect: DOMRect,
+    oldRect: { left: number; top: number; width: number; height: number },
     nextWidth: number,
     nextHeight: number,
     zoomPosition: { x: number; y: number },
@@ -44,6 +44,54 @@ export function zoomKeepPoint(
     return {
         x: zoomPosition.x - nextWidth * ratioX,
         y: zoomPosition.y - nextHeight * ratioY,
+    };
+}
+
+/** 双指缩放：优先用仍在图上的触点当锚点，避免外侧手指把图吸走。 */
+export function pickPinchFocalPoints<T extends { x: number; y: number }>(
+    points: T[],
+    rect: { left: number; top: number; width: number; height: number },
+    pad = 16,
+): T[] {
+    const inside = points.filter((point) => (
+        point.x >= rect.left - pad
+        && point.x <= rect.left + rect.width + pad
+        && point.y >= rect.top - pad
+        && point.y <= rect.top + rect.height + pad
+    ));
+    return inside.length > 0 ? inside : points;
+}
+
+export function averagePoints(points: { x: number; y: number }[]): { x: number; y: number } {
+    if (!points.length) {
+        return { x: 0, y: 0 };
+    }
+    let x = 0;
+    let y = 0;
+    for (const point of points) {
+        x += point.x;
+        y += point.y;
+    }
+    return { x: x / points.length, y: y / points.length };
+}
+
+export function distanceBetween(a: { x: number; y: number }, b: { x: number; y: number }): number {
+    return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/** 用 pinch 开始时冻结的锚点比例，让该图上的点跟着当前锚点走。 */
+export function pinchZoomKeepFocal(
+    startRect: { left: number; top: number; width: number; height: number },
+    startFocal: { x: number; y: number },
+    currentFocal: { x: number; y: number },
+    nextWidth: number,
+    nextHeight: number,
+): { x: number; y: number } {
+    const ratioX = startRect.width ? (startFocal.x - startRect.left) / startRect.width : 0.5;
+    const ratioY = startRect.height ? (startFocal.y - startRect.top) / startRect.height : 0.5;
+    return {
+        x: currentFocal.x - nextWidth * ratioX,
+        y: currentFocal.y - nextHeight * ratioY,
     };
 }
 

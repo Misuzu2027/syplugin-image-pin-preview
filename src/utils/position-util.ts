@@ -1,5 +1,3 @@
-import exp from "constants";
-
 export class Vector2 {
     x: number;
     y: number;
