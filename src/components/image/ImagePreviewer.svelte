@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
     import { openBy } from "@/libs/siyuan/editor/util";
     import { MenuItem } from "@/libs/siyuan/menus/Menu";
     import { copyAssetFile, copyPNGByLink, exportAsset, getCopyFilePath } from "@/libs/siyuan/menus/util";
@@ -18,6 +18,9 @@
         distanceBetween,
         getViewportContainScale,
         getViewportFitScale,
+        getDockedCornerShape,
+        getDockedShape,
+        getMetaScale,
         getVisualSize,
         imageFlipCss,
         keepCenter,
@@ -48,8 +51,19 @@
     const META_MIN_WIDTH = 160;
     const META_MIN_HEIGHT = 80;
     const NAME_MIN_WIDTH = 240;
+    const TOOLBAR_LARGE_MIN_WIDTH = 520;
+    const TOOLBAR_LARGE_MIN_HEIGHT = 240;
+    const META_COMPACT_SCALE = 0.75;
+    const META_COMPACT_HEIGHT = 140;
+    const BAR_FILLET = 12;
+    const TAB_FILLET = 8;
+    const CORNER_FILLET = 8;
+    const CORNER_FILLET_MIN = 4;
 
     let showOptionButton = SettingService.ins.SettingConfig?.showOptionButton !== false;
+    let dockToolbar = SettingService.ins.SettingConfig?.dockToolbar !== false;
+    let toolsExpanded = false;
+    let dockHold = false;
     let currentIndex = Math.min(Math.max(startIndex, 0), Math.max(images.length - 1, 0));
     let currentSrc = "";
     let naturalW = 0;
@@ -80,6 +94,16 @@
     let longPressTimeout: ReturnType<typeof setTimeout>;
 
     let floatEl: HTMLElement;
+    let tabBoxWidth = 0;
+    let tabBoxHeight = 0;
+    let barBoxWidth = 0;
+    let barBoxHeight = 0;
+    let metaBoxWidth = 0;
+    let metaBoxHeight = 0;
+    let indexBoxWidth = 0;
+    let indexBoxHeight = 0;
+    let flashing = false;
+    let flashTimer: ReturnType<typeof setTimeout> | undefined;
 
     $: contentW = Math.max(1, naturalW * displayScale);
     $: contentH = Math.max(1, naturalH * displayScale);
@@ -91,13 +115,27 @@
     $: showCopyFile = !!getCopyFilePath(currentSrc || images[currentIndex] || "");
     $: showCopyPNG = canCopyImageToClipboard();
     $: showToolbarCopy = showCopyFile || showCopyPNG;
-    $: showOverlayTools = showOptionButton && visual.width >= (showToolbarCopy ? TOOLBAR_WITH_COPY_MIN_WIDTH : TOOLBAR_MIN_WIDTH);
+    $: toolbarFullMinWidth = showToolbarCopy ? TOOLBAR_WITH_COPY_MIN_WIDTH : TOOLBAR_MIN_WIDTH;
+    $: showOverlayTools = showOptionButton && visual.width >= toolbarFullMinWidth;
+    $: toolbarLarge = visual.width >= TOOLBAR_LARGE_MIN_WIDTH && visual.height >= TOOLBAR_LARGE_MIN_HEIGHT;
+    $: toolbarDocked = showOverlayTools && (dockToolbar || !toolbarLarge);
     $: showOverlayNav = showOptionButton && images.length > 1 && visual.width >= NAV_MIN_WIDTH && visual.height >= NAV_MIN_HEIGHT;
     $: showOverlayClose = visual.width >= CLOSE_MIN_SIZE && visual.height >= CLOSE_MIN_SIZE;
-    $: showOverlayIndex = visual.width >= INDEX_MIN_WIDTH && visual.height >= INDEX_MIN_HEIGHT;
-    $: canShowMeta = visual.width >= META_MIN_WIDTH && visual.height >= META_MIN_HEIGHT;
+    $: showOverlayIndex = showOptionButton && visual.width >= INDEX_MIN_WIDTH && visual.height >= INDEX_MIN_HEIGHT;
+    $: canShowMeta = showOptionButton && visual.width >= META_MIN_WIDTH && visual.height >= META_MIN_HEIGHT;
     $: showOverlayName = canShowMeta && visual.width >= NAME_MIN_WIDTH;
     $: showOverlayMeta = canShowMeta && ((showOverlayName && (!!fileName || showTitle)) || !!(naturalW && naturalH));
+    $: metaScale = getMetaScale(visual.width, visual.height);
+    $: metaCompact = canShowMeta && (metaScale < META_COMPACT_SCALE || visual.height < META_COMPACT_HEIGHT);
+    $: compactName = showTitle ? imageTitle : fileName;
+    $: compactNameKey = showTitle ? "title" : "name";
+    $: tabWidth = Math.round(Math.min(380, Math.max(240, visual.width * 0.42)));
+    $: tabHeight = Math.round(Math.min(14, Math.max(10, visual.width * 0.018)));
+    $: tabShape = getDockedShape(tabBoxWidth || tabWidth, tabBoxHeight || tabHeight, TAB_FILLET);
+    $: barShape = getDockedShape(barBoxWidth, barBoxHeight, BAR_FILLET);
+    $: cornerFillet = Math.min(CORNER_FILLET, Math.max(CORNER_FILLET_MIN, CORNER_FILLET * metaScale));
+    $: metaShape = getDockedCornerShape(metaBoxWidth, metaBoxHeight, cornerFillet, cornerFillet, "left");
+    $: indexShape = getDockedCornerShape(indexBoxWidth, indexBoxHeight, cornerFillet, cornerFillet, "right");
 
     let copiedTipKey = "";
 
@@ -125,7 +163,24 @@
         floatEl?.removeEventListener("wheel", handleWheel);
         floatEl?.removeEventListener("keydown", handleKeydown);
         clearTimeout(longPressTimeout);
+        clearTimeout(flashTimer);
     });
+
+    export function getCurrentSrc(): string {
+        return currentSrc || images[currentIndex] || "";
+    }
+
+    export function flashHighlight() {
+        flashing = false;
+        clearTimeout(flashTimer);
+        requestAnimationFrame(() => {
+            flashing = true;
+            floatEl?.focus();
+            flashTimer = setTimeout(() => {
+                flashing = false;
+            }, 650);
+        });
+    }
 
     function t(pluginKey: string, fallback: string, siyuanKey?: string): string {
         if (siyuanKey && window.siyuan?.languages?.[siyuanKey]) {
@@ -424,7 +479,12 @@
         if (event.button !== 0 && event.button !== 1) {
             return;
         }
-        if ((event.target as HTMLElement).closest("button")) {
+        const target = event.target as HTMLElement;
+        if (toolbarDocked && toolsExpanded && isCoarsePointer() && !target.closest(".ipp-tools")) {
+            toolsExpanded = false;
+            return;
+        }
+        if (target.closest("button")) {
             return;
         }
         if (isPinching || (dragPointerId !== null && event.pointerId !== dragPointerId)) {
@@ -779,6 +839,43 @@
     function hideCopyTip() {
         copiedTipKey = "";
     }
+
+    function isCoarsePointer() {
+        return EnvConfig.ins.isMobile || !!window.matchMedia?.("(hover: none), (pointer: coarse)").matches;
+    }
+
+    function toggleDockToolbar(event: MouseEvent) {
+        dockToolbar = !dockToolbar;
+        SettingService.ins.updateSettingCofnigValue("dockToolbar", dockToolbar);
+        if (dockToolbar) {
+            toolsExpanded = false;
+            dockHold = true;
+            (event.currentTarget as HTMLButtonElement | null)?.blur();
+        }
+    }
+
+    function handleToolsPointerEnter() {
+        if (dockHold || !toolbarDocked) {
+            return;
+        }
+        toolsExpanded = true;
+    }
+
+    function handleToolsPointerLeave() {
+        dockHold = false;
+        if (toolbarDocked && !isCoarsePointer()) {
+            toolsExpanded = false;
+        }
+    }
+
+    function handleTabActivate(event: Event) {
+        event.stopPropagation();
+        if (!toolbarDocked) {
+            return;
+        }
+        toolsExpanded = true;
+        dockHold = false;
+    }
 </script>
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -788,8 +885,9 @@
     class="ipp-float"
     class:ipp-float--ready={ready}
     class:ipp-float--dragging={isDragging}
+    class:ipp-float--flash={flashing}
     tabindex="0"
-    style="left:{position.x}px;top:{position.y}px;width:{visual.width}px;height:{visual.height}px;"
+    style="left:{position.x}px;top:{position.y}px;width:{visual.width}px;height:{visual.height}px;--ipp-meta-scale:{metaScale};--ipp-tab-w:{tabWidth}px;--ipp-tab-h:{tabHeight}px"
     on:pointerdown={handlePointerDown}
     on:contextmenu|stopPropagation={handleContextmenu}
     on:touchstart={handleTouchStart}
@@ -811,40 +909,87 @@
     {/if}
 
     {#if showOverlayTools}
-        <div class="ipp-tools">
-            <button type="button" class="ipp-btn" title={t("zoomOut", "缩小", "zoomOut")} on:click|stopPropagation={() => setScale(displayScale / 1.2)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon"><use xlink:href="#ippIconZoomOut"></use></svg>
-            </button>
-            <button type="button" class="ipp-btn" title={t("zoomIn", "放大", "zoomIn")} on:click|stopPropagation={() => setScale(displayScale * 1.2)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon"><use xlink:href="#ippIconZoomIn"></use></svg>
-            </button>
-            <button type="button" class="ipp-btn" title={t("actualSize", "实际大小", "pageScaleActual")} on:click|stopPropagation={() => setActualSize()} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon"><use xlink:href="#ippIconActual"></use></svg>
-            </button>
-            <button type="button" class="ipp-btn" title={t("fitWindow", "适应窗口", "reset")} on:click|stopPropagation={fitToViewport} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon"><use xlink:href="#ippIconFit"></use></svg>
-            </button>
-            <button type="button" class="ipp-btn" title={t("rotateLeft", "向左旋转", "rotateCcw")} on:click|stopPropagation={() => rotateBy(-90)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon"><use xlink:href="#ippIconRotateLeft"></use></svg>
-            </button>
-            <button type="button" class="ipp-btn" title={t("rotateRight", "向右旋转", "rotateCw")} on:click|stopPropagation={() => rotateBy(90)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon"><use xlink:href="#ippIconRotateRight"></use></svg>
-            </button>
-            <button type="button" class="ipp-btn" title={t("flipHorizontal", "水平翻转", "imageFlipHorizontal")} on:click|stopPropagation={() => flip("h")} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon"><use xlink:href="#ippIconFlipH"></use></svg>
-            </button>
-            <button type="button" class="ipp-btn" title={t("flipVertical", "垂直翻转", "imageFlipVertical")} on:click|stopPropagation={() => flip("v")} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon"><use xlink:href="#ippIconFlipV"></use></svg>
-            </button>
-            {#if showCopyFile}
-                <button type="button" class="ipp-btn" title={window.siyuan.languages.copyFile || t("copyFile", "复制文件")} on:click|stopPropagation={() => copyAssetFile(currentSrc)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                    <svg class="ipp-icon"><use xlink:href="#ippIconCopyFile"></use></svg>
-                </button>
-            {:else if showCopyPNG}
-                <button type="button" class="ipp-btn" title={window.siyuan.languages.copyAsPNG || t("copyAsPNG", "复制为 PNG")} on:click|stopPropagation={() => copyPNGByLink(currentSrc)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                    <svg class="ipp-icon"><use xlink:href="#ippIconCopyPNG"></use></svg>
-                </button>
+        <div
+            class="ipp-tools"
+            class:ipp-tools--docked={toolbarDocked}
+            class:ipp-tools--open={toolbarDocked && toolsExpanded}
+            class:ipp-tools--avoid-close={showOverlayClose}
+            on:pointerenter={handleToolsPointerEnter}
+            on:pointerleave={handleToolsPointerLeave}
+        >
+            {#if toolbarDocked}
+                <div
+                    class="ipp-tools__tab"
+                    bind:clientWidth={tabBoxWidth}
+                    bind:clientHeight={tabBoxHeight}
+                    on:pointerdown|stopPropagation={handleTabActivate}
+                    on:click|stopPropagation={handleTabActivate}
+                >
+                    <svg
+                        class="ipp-shape ipp-tools__shape"
+                        style="left:{-tabShape.fillet}px"
+                        width={tabShape.width}
+                        height={tabShape.height}
+                        viewBox="0 0 {tabShape.width} {tabShape.height}"
+                        aria-hidden="true"
+                    ><path d={tabShape.path} /></svg>
+                    <span class="ipp-tools__tab-bar"></span>
+                </div>
             {/if}
+            <div class="ipp-tools__bar" bind:clientWidth={barBoxWidth} bind:clientHeight={barBoxHeight}>
+                <svg
+                    class="ipp-shape ipp-tools__shape"
+                    style="left:{-barShape.fillet}px"
+                    width={barShape.width}
+                    height={barShape.height}
+                    viewBox="0 0 {barShape.width} {barShape.height}"
+                    aria-hidden="true"
+                ><path d={barShape.path} /></svg>
+                <button type="button" class="ipp-btn" title={t("zoomOut", "缩小", "zoomOut")} on:click|stopPropagation={() => setScale(displayScale / 1.2)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+                    <svg class="ipp-icon"><use xlink:href="#ippIconZoomOut"></use></svg>
+                </button>
+                <button type="button" class="ipp-btn" title={t("zoomIn", "放大", "zoomIn")} on:click|stopPropagation={() => setScale(displayScale * 1.2)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+                    <svg class="ipp-icon"><use xlink:href="#ippIconZoomIn"></use></svg>
+                </button>
+                <button type="button" class="ipp-btn" title={t("actualSize", "实际大小", "pageScaleActual")} on:click|stopPropagation={() => setActualSize()} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+                    <svg class="ipp-icon"><use xlink:href="#ippIconActual"></use></svg>
+                </button>
+                <button type="button" class="ipp-btn" title={t("fitWindow", "适应窗口", "reset")} on:click|stopPropagation={fitToViewport} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+                    <svg class="ipp-icon"><use xlink:href="#ippIconFit"></use></svg>
+                </button>
+                <button type="button" class="ipp-btn" class:ipp-btn--active={rotate !== 0} title={t("rotateLeft", "向左旋转", "rotateCcw")} on:click|stopPropagation={() => rotateBy(-90)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+                    <svg class="ipp-icon"><use xlink:href="#ippIconRotateLeft"></use></svg>
+                </button>
+                <button type="button" class="ipp-btn" class:ipp-btn--active={rotate !== 0} title={t("rotateRight", "向右旋转", "rotateCw")} on:click|stopPropagation={() => rotateBy(90)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+                    <svg class="ipp-icon"><use xlink:href="#ippIconRotateRight"></use></svg>
+                </button>
+                <button type="button" class="ipp-btn" class:ipp-btn--active={flipH} title={t("flipHorizontal", "水平翻转", "imageFlipHorizontal")} on:click|stopPropagation={() => flip("h")} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+                    <svg class="ipp-icon"><use xlink:href="#ippIconFlipH"></use></svg>
+                </button>
+                <button type="button" class="ipp-btn" class:ipp-btn--active={flipV} title={t("flipVertical", "垂直翻转", "imageFlipVertical")} on:click|stopPropagation={() => flip("v")} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+                    <svg class="ipp-icon"><use xlink:href="#ippIconFlipV"></use></svg>
+                </button>
+                {#if showCopyFile}
+                    <button type="button" class="ipp-btn" title={window.siyuan.languages.copyFile || t("copyFile", "复制文件")} on:click|stopPropagation={() => copyAssetFile(currentSrc)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+                        <svg class="ipp-icon"><use xlink:href="#ippIconCopyFile"></use></svg>
+                    </button>
+                {:else if showCopyPNG}
+                    <button type="button" class="ipp-btn" title={window.siyuan.languages.copyAsPNG || t("copyAsPNG", "复制为 PNG")} on:click|stopPropagation={() => copyPNGByLink(currentSrc)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+                        <svg class="ipp-icon"><use xlink:href="#ippIconCopyPNG"></use></svg>
+                    </button>
+                {/if}
+                <button
+                    type="button"
+                    class="ipp-btn"
+                    class:ipp-btn--active={dockToolbar}
+                    title={dockToolbar ? t("undockToolbar", "取消吸附") : t("dockToolbar", "吸附顶部")}
+                    on:click|stopPropagation={toggleDockToolbar}
+                    on:pointerdown|stopPropagation
+                    on:dblclick|stopPropagation
+                >
+                    <svg class="ipp-icon"><use xlink:href="#ippIconDock"></use></svg>
+                </button>
+            </div>
         </div>
     {/if}
 
@@ -864,37 +1009,79 @@
     {/if}
 
     {#if showOverlayIndex && images.length}
-        <div class="ipp-index">{currentIndex + 1} / {images.length}</div>
+        <div class="ipp-index" bind:clientWidth={indexBoxWidth} bind:clientHeight={indexBoxHeight}>
+            <svg
+                class="ipp-shape ipp-index__shape"
+                width={indexShape.width}
+                height={indexShape.height}
+                viewBox="0 0 {indexShape.width} {indexShape.height}"
+                aria-hidden="true"
+            ><path d={indexShape.path} /></svg>
+            <span class="ipp-index__text">{currentIndex + 1} / {images.length}</span>
+        </div>
     {/if}
 
     {#if showOverlayMeta}
-        <div class="ipp-meta">
-            {#if showOverlayName && showTitle}
-                <span class="ipp-copy" on:pointerleave={hideCopyTip}>
-                    <button
-                        type="button"
-                        class="ipp-copy__text"
-                        on:click|stopPropagation={(event) => copyOverlayText(event, "title", imageTitle)}
-                        on:pointerdown|stopPropagation
-                        on:dblclick|stopPropagation
-                    >{imageTitle}</button>
-                    <span class="ipp-copy__tip">{copiedTipKey === "title" ? t("copiedSuccess", "复制成功") : t("clickToCopy", "点击复制")}</span>
-                </span>
-            {/if}
-            {#if showOverlayName && fileName}
-                <span class="ipp-copy" on:pointerleave={hideCopyTip}>
-                    <button
-                        type="button"
-                        class="ipp-copy__text"
-                        on:click|stopPropagation={(event) => copyOverlayText(event, "name", fileName)}
-                        on:pointerdown|stopPropagation
-                        on:dblclick|stopPropagation
-                    >{fileName}</button>
-                    <span class="ipp-copy__tip">{copiedTipKey === "name" ? t("copiedSuccess", "复制成功") : t("clickToCopy", "点击复制")}</span>
-                </span>
-            {/if}
-            {#if naturalW && naturalH}
-                <span class="ipp-meta__dim">{naturalW} × {naturalH}</span>
+        <div
+            class="ipp-meta"
+            class:ipp-meta--compact={metaCompact}
+            bind:clientWidth={metaBoxWidth}
+            bind:clientHeight={metaBoxHeight}
+        >
+            <svg
+                class="ipp-shape ipp-meta__shape"
+                width={metaShape.width}
+                height={metaShape.height}
+                viewBox="0 0 {metaShape.width} {metaShape.height}"
+                aria-hidden="true"
+            ><path d={metaShape.path} /></svg>
+            {#if metaCompact}
+                {#if showOverlayName && compactName}
+                    <span class="ipp-copy" on:pointerleave={hideCopyTip}>
+                        <button
+                            type="button"
+                            class="ipp-copy__text"
+                            on:click|stopPropagation={(event) => copyOverlayText(event, compactNameKey, compactName)}
+                            on:pointerdown|stopPropagation
+                            on:dblclick|stopPropagation
+                        >{compactName}</button>
+                        <span class="ipp-copy__tip">{copiedTipKey === compactNameKey ? t("copiedSuccess", "复制成功") : t("clickToCopy", "点击复制")}</span>
+                    </span>
+                    {#if naturalW && naturalH}
+                        <span class="ipp-meta__sep">·</span>
+                    {/if}
+                {/if}
+                {#if naturalW && naturalH}
+                    <span class="ipp-meta__dim">{naturalW} × {naturalH}</span>
+                {/if}
+            {:else}
+                {#if showOverlayName && showTitle}
+                    <span class="ipp-copy" on:pointerleave={hideCopyTip}>
+                        <button
+                            type="button"
+                            class="ipp-copy__text"
+                            on:click|stopPropagation={(event) => copyOverlayText(event, "title", imageTitle)}
+                            on:pointerdown|stopPropagation
+                            on:dblclick|stopPropagation
+                        >{imageTitle}</button>
+                        <span class="ipp-copy__tip">{copiedTipKey === "title" ? t("copiedSuccess", "复制成功") : t("clickToCopy", "点击复制")}</span>
+                    </span>
+                {/if}
+                {#if showOverlayName && fileName}
+                    <span class="ipp-copy" on:pointerleave={hideCopyTip}>
+                        <button
+                            type="button"
+                            class="ipp-copy__text"
+                            on:click|stopPropagation={(event) => copyOverlayText(event, "name", fileName)}
+                            on:pointerdown|stopPropagation
+                            on:dblclick|stopPropagation
+                        >{fileName}</button>
+                        <span class="ipp-copy__tip">{copiedTipKey === "name" ? t("copiedSuccess", "复制成功") : t("clickToCopy", "点击复制")}</span>
+                    </span>
+                {/if}
+                {#if naturalW && naturalH}
+                    <span class="ipp-meta__dim">{naturalW} × {naturalH}</span>
+                {/if}
             {/if}
         </div>
     {/if}
@@ -902,6 +1089,18 @@
 
 <style>
     .ipp-float {
+        --ipp-meta-font: clamp(9px, calc(12px * var(--ipp-meta-scale, 1)), 12px);
+        --ipp-meta-line: clamp(12px, calc(16px * var(--ipp-meta-scale, 1)), 16px);
+        --ipp-meta-pad-y: clamp(3px, calc(5px * var(--ipp-meta-scale, 1)), 5px);
+        --ipp-meta-pad-x: clamp(4px, calc(8px * var(--ipp-meta-scale, 1)), 8px);
+        --ipp-meta-gap: clamp(1px, calc(2px * var(--ipp-meta-scale, 1)), 2px);
+        --ipp-meta-radius: clamp(4px, calc(8px * var(--ipp-meta-scale, 1)), 8px);
+        --ipp-meta-tip-font: clamp(9px, calc(11px * var(--ipp-meta-scale, 1)), 11px);
+        --ipp-meta-tip-pad-y: clamp(2px, calc(3px * var(--ipp-meta-scale, 1)), 3px);
+        --ipp-meta-tip-pad-x: clamp(5px, calc(8px * var(--ipp-meta-scale, 1)), 8px);
+        --ipp-meta-tip-gap: clamp(3px, calc(6px * var(--ipp-meta-scale, 1)), 6px);
+        --ipp-index-reserve: clamp(48px, calc(72px * var(--ipp-meta-scale, 1)), 72px);
+        --ipp-panel-bg: rgba(0, 0, 0, 0.55);
         position: fixed;
         z-index: 1;
         pointer-events: auto;
@@ -923,6 +1122,22 @@
     .ipp-float:focus,
     .ipp-float:focus-visible {
         box-shadow: 0 8px 16px rgba(3, 185, 226, 0.35);
+    }
+
+    .ipp-float--flash,
+    .ipp-float--flash:hover,
+    .ipp-float--flash:focus,
+    .ipp-float--flash:focus-visible {
+        animation: ipp-flash 0.6s ease;
+    }
+
+    @keyframes ipp-flash {
+        0%, 100% {
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+        }
+        25%, 75% {
+            box-shadow: 0 0 0 3px rgba(3, 185, 226, 0.9), 0 8px 24px rgba(3, 185, 226, 0.55);
+        }
     }
 
     .ipp-float--dragging {
@@ -958,23 +1173,96 @@
 
     .ipp-tools {
         position: absolute;
-        top: 8px;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 2;
+        pointer-events: none;
+    }
+
+    /* 面板底色整体由一条路径绘制，内凹圆角与直边相切，不会出现拼接痕迹。 */
+    .ipp-shape {
+        position: absolute;
+        display: block;
+        fill: var(--ipp-panel-bg);
+        pointer-events: none;
+    }
+
+    .ipp-tools__shape {
+        top: 0;
+    }
+
+    .ipp-meta__shape {
+        left: 0;
+        bottom: 0;
+    }
+
+    .ipp-index__shape {
+        right: 0;
+        bottom: 0;
+    }
+
+    .ipp-tools--docked {
+        height: var(--ipp-tab-h);
+    }
+
+    .ipp-tools__tab {
+        position: absolute;
+        top: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: var(--ipp-tab-w);
+        height: var(--ipp-tab-h);
+        cursor: pointer;
+        pointer-events: auto;
+    }
+
+    .ipp-tools--avoid-close .ipp-tools__tab {
+        max-width: calc(100% - 72px);
+    }
+
+    .ipp-tools__tab-bar {
+        position: relative;
+        display: block;
+        width: calc(var(--ipp-tab-w) * 0.37);
+        height: 3px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.7);
+    }
+
+    .ipp-tools__bar {
+        position: absolute;
+        top: 0;
         left: 50%;
         transform: translateX(-50%);
         display: flex;
         align-items: center;
         gap: 2px;
-        padding: 3px;
-        border-radius: 999px;
-        background: rgba(0, 0, 0, 0.42);
+        padding: 6px 14px 8px;
         opacity: 0;
-        z-index: 2;
         pointer-events: none;
+        transition: opacity 0.16s ease;
     }
 
-    .ipp-float:hover .ipp-tools,
-    .ipp-float:focus .ipp-tools,
-    .ipp-float:focus-within .ipp-tools {
+    .ipp-tools__bar .ipp-btn {
+        position: relative;
+    }
+
+    .ipp-float:hover .ipp-tools:not(.ipp-tools--docked) .ipp-tools__bar,
+    .ipp-float:focus .ipp-tools:not(.ipp-tools--docked) .ipp-tools__bar,
+    .ipp-float:focus-within .ipp-tools:not(.ipp-tools--docked) .ipp-tools__bar {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .ipp-tools--docked.ipp-tools--open .ipp-tools__tab {
+        opacity: 0;
+    }
+
+    .ipp-tools--docked.ipp-tools--open .ipp-tools__bar {
         opacity: 1;
         pointer-events: auto;
     }
@@ -1009,6 +1297,15 @@
     .ipp-btn:hover {
         background: rgba(255, 255, 255, 0.18);
         color: #fff;
+    }
+
+    .ipp-btn--active {
+        background: rgba(255, 255, 255, 0.28);
+        color: #6ec8e8;
+    }
+
+    .ipp-btn--active:hover {
+        color: #6ec8e8;
     }
 
     .ipp-icon {
@@ -1046,6 +1343,7 @@
     .ipp-nav--close {
         top: 6px;
         right: 6px;
+        z-index: 3;
     }
 
     .ipp-float:hover .ipp-nav,
@@ -1055,38 +1353,57 @@
         background: rgba(255, 255, 255, 0.82);
     }
 
+    /* 贴角摆放，两个角落面板用同一组内边距，单行时高度一致。 */
     .ipp-index {
         position: absolute;
-        right: 8px;
-        bottom: 8px;
-        padding: 2px 7px;
-        border-radius: 8px;
-        background: rgba(0, 0, 0, 0.55);
+        right: 0;
+        bottom: 0;
+        padding: var(--ipp-meta-pad-y) var(--ipp-meta-pad-x);
         color: #fff;
-        font-size: 12px;
-        line-height: 16px;
+        font-size: var(--ipp-meta-font);
+        line-height: var(--ipp-meta-line);
         z-index: 2;
         pointer-events: none;
         white-space: nowrap;
     }
 
+    .ipp-index__text {
+        position: relative;
+    }
+
     .ipp-meta {
         position: absolute;
-        left: 8px;
-        bottom: 8px;
+        left: 0;
+        bottom: 0;
         display: flex;
         flex-direction: column;
         align-items: flex-start;
-        gap: 2px;
-        max-width: calc(100% - 72px);
-        padding: 4px 8px;
-        border-radius: 8px;
-        background: rgba(0, 0, 0, 0.55);
+        gap: var(--ipp-meta-gap);
+        max-width: calc(100% - var(--ipp-index-reserve));
+        padding: var(--ipp-meta-pad-y) var(--ipp-meta-pad-x);
         color: #fff;
-        font-size: 12px;
-        line-height: 16px;
+        font-size: var(--ipp-meta-font);
+        line-height: var(--ipp-meta-line);
         z-index: 2;
         pointer-events: none;
+    }
+
+    .ipp-meta--compact {
+        flex-direction: row;
+        align-items: center;
+        flex-wrap: nowrap;
+    }
+
+    .ipp-meta--compact .ipp-copy {
+        display: inline-block;
+        min-width: 0;
+        max-width: 60%;
+    }
+
+    .ipp-meta__sep {
+        position: relative;
+        flex: 0 0 auto;
+        opacity: 0.7;
     }
 
     .ipp-copy {
@@ -1120,13 +1437,13 @@
     .ipp-copy__tip {
         position: absolute;
         left: 0;
-        bottom: calc(100% + 6px);
-        padding: 3px 8px;
-        border-radius: 6px;
-        background: rgba(0, 0, 0, 0.55);
+        bottom: calc(100% + var(--ipp-meta-tip-gap));
+        padding: var(--ipp-meta-tip-pad-y) var(--ipp-meta-tip-pad-x);
+        border-radius: calc(var(--ipp-meta-radius) * 0.75);
+        background: var(--ipp-panel-bg);
         color: #fff;
-        font-size: 11px;
-        line-height: 16px;
+        font-size: var(--ipp-meta-tip-font);
+        line-height: var(--ipp-meta-line);
         white-space: nowrap;
         opacity: 0;
         pointer-events: none;
@@ -1138,6 +1455,7 @@
     }
 
     .ipp-meta__dim {
+        position: relative;
         opacity: 0.86;
         overflow: hidden;
         text-overflow: ellipsis;

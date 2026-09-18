@@ -9,6 +9,8 @@ export class SettingConfig {
 
     showOptionButton: Boolean;
 
+    dockToolbar: Boolean;
+
 }
 
 

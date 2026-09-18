@@ -3,7 +3,19 @@ import { SettingService } from "../setting/SettingService";
 import ImagePreviewerSvelte from "@/components/image/ImagePreviewer.svelte";
 import { getCurrentAttrViewImages, getDocImageAssets } from "@/utils/api";
 import { SvelteComponent } from "svelte";
-import { ensureCurrentInList, findImageIndex, removeCompressURL } from "@/utils/image-url";
+import { ensureCurrentInList, findImageIndex, removeCompressURL, sameImageList } from "@/utils/image-url";
+
+interface ImagePreviewerInstance extends SvelteComponent {
+    getCurrentSrc: () => string;
+    flashHighlight: () => void;
+}
+
+interface PreviewSession {
+    images: string[];
+    container: HTMLElement;
+    component: ImagePreviewerInstance | null;
+    closer: () => void;
+}
 
 const HOST_CLASS = "ipp-host";
 const WINDOW_CLASS = "ipp-window";
@@ -31,7 +43,7 @@ export class ImageService {
 let eventsBound = false;
 let maxZIndex = 99999;
 let previewCount = 0;
-const previewClosers = new Set<() => void>();
+const previewSessions = new Set<PreviewSession>();
 let lastOpenKey = "";
 let lastOpenAt = 0;
 
@@ -188,7 +200,8 @@ async function handleCaptureDblClick(event: MouseEvent) {
 
 async function openFromEditorImage(image: HTMLImageElement, localOnly: boolean) {
     const currentSrc = removeCompressURL(image.getAttribute("src") || "");
-    if (!currentSrc || !shouldOpenPreview(`editor:${currentSrc}`)) {
+    const docId = getDocRootId(image);
+    if (!currentSrc || !shouldOpenPreview(`editor:${localOnly ? "local" : "doc"}:${docId}:${currentSrc}`)) {
         return;
     }
 
@@ -197,7 +210,6 @@ async function openFromEditorImage(image: HTMLImageElement, localOnly: boolean) 
         const scope = image.closest(".protyle-wysiwyg") || image.closest(".protyle-preview") || document;
         images = collectDomImageSrcs(scope, EDITOR_SCOPE_IMAGE_SELECTOR);
     } else {
-        const docId = getDocRootId(image);
         if (docId) {
             images = await getDocImageAssets(docId);
         }
@@ -217,12 +229,14 @@ async function openFromEditorImage(image: HTMLImageElement, localOnly: boolean) 
 
 async function openFromAvImage(image: HTMLImageElement, localOnly: boolean) {
     const currentSrc = removeCompressURL(image.getAttribute("src") || "");
-    if (!currentSrc || !shouldOpenPreview(`av:${currentSrc}`)) {
+    const avBlock = image.closest("[data-av-id][data-node-id]") as HTMLElement | null;
+    const attrValue = image.closest(".custom-attr__avvalue") as HTMLElement | null;
+    const avId = avBlock?.getAttribute("data-av-id") || "";
+    const nodeId = avBlock?.getAttribute("data-node-id") || "";
+    if (!currentSrc || !shouldOpenPreview(`av:${localOnly ? "local" : "full"}:${avId}:${nodeId}:${currentSrc}`)) {
         return;
     }
 
-    const avBlock = image.closest("[data-av-id][data-node-id]") as HTMLElement | null;
-    const attrValue = image.closest(".custom-attr__avvalue") as HTMLElement | null;
     let images: string[] = [];
 
     if (localOnly || !avBlock) {
@@ -252,25 +266,33 @@ async function openFromAvImage(image: HTMLImageElement, localOnly: boolean) {
 }
 
 export function previewImages(images: string[], startIndex = 0, imageTitles: string[] = []) {
+    if (focusExistingPreview(images, images[startIndex] || "")) {
+        return;
+    }
+
     previewCount++;
     maxZIndex++;
 
     const container = createPreviewContainer();
     container.addEventListener("mousedown", handleContainerMouseDown);
 
-    let imagePreviewerSvelte: SvelteComponent;
-    const closer = () => closeImagePreview(imagePreviewerSvelte, container, closer);
-    previewClosers.add(closer);
+    const session: PreviewSession = {
+        images: images.slice(),
+        container,
+        component: null,
+        closer: () => closeImagePreview(session),
+    };
+    previewSessions.add(session);
 
-    imagePreviewerSvelte = new ImagePreviewerSvelte({
+    session.component = new ImagePreviewerSvelte({
         target: container,
         props: {
             images,
             imageTitles,
             startIndex,
-            handleCloseClick: closer,
+            handleCloseClick: session.closer,
         },
-    });
+    }) as ImagePreviewerInstance;
 }
 
 function createPreviewContainer(): HTMLElement {
@@ -282,7 +304,36 @@ function createPreviewContainer(): HTMLElement {
 }
 
 function handleContainerMouseDown(event: MouseEvent) {
-    const host = event.currentTarget as HTMLElement;
+    bringHostToFront(event.currentTarget as HTMLElement);
+}
+
+function findExistingPreview(images: string[], currentSrc: string): PreviewSession | null {
+    if (!currentSrc) {
+        return null;
+    }
+    for (const session of previewSessions) {
+        if (!sameImageList(session.images, images)) {
+            continue;
+        }
+        const showing = session.component?.getCurrentSrc() || "";
+        if (showing && findImageIndex([showing], currentSrc) === 0) {
+            return session;
+        }
+    }
+    return null;
+}
+
+function focusExistingPreview(images: string[], currentSrc: string): boolean {
+    const session = findExistingPreview(images, currentSrc);
+    if (!session) {
+        return false;
+    }
+    bringHostToFront(session.container);
+    session.component?.flashHighlight();
+    return true;
+}
+
+function bringHostToFront(host: HTMLElement) {
     const curZIndex = Number(window.getComputedStyle(host).zIndex);
     if (curZIndex === maxZIndex) {
         return;
@@ -291,10 +342,10 @@ function handleContainerMouseDown(event: MouseEvent) {
     host.style.zIndex = String(maxZIndex);
 }
 
-function closeImagePreview(imagePreviewerSvelte: SvelteComponent, container: HTMLElement, closer: () => void) {
-    previewClosers.delete(closer);
-    imagePreviewerSvelte?.$destroy();
-    container.remove();
+function closeImagePreview(session: PreviewSession) {
+    previewSessions.delete(session);
+    session.component?.$destroy();
+    session.container.remove();
     previewCount--;
     if (previewCount <= 0) {
         previewCount = 0;
@@ -303,5 +354,5 @@ function closeImagePreview(imagePreviewerSvelte: SvelteComponent, container: HTM
 }
 
 function closeAllPreviews() {
-    [...previewClosers].forEach((close) => close());
+    [...previewSessions].forEach((session) => session.closer());
 }

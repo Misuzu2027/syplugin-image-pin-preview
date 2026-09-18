@@ -84,6 +84,13 @@ export function findImageIndex(list: string[], current: string): number {
     });
 }
 
+export function sameImageList(a: string[], b: string[]): boolean {
+    if (!a?.length || !b?.length || a.length !== b.length) {
+        return false;
+    }
+    return a.every((src, i) => findImageIndex([b[i]], src) === 0);
+}
+
 export function uniqueImageList(list: string[]): string[] {
     const seen = new Set<string>();
     const result: string[] = [];

@@ -111,6 +111,7 @@ function getDefaultSettingConfig() {
     defaultConfig.isOpen = true;
 
     defaultConfig.showOptionButton = true;
+    defaultConfig.dockToolbar = true;
     return defaultConfig;
 }
 

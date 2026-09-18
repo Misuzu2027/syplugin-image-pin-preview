@@ -101,6 +101,8 @@
     "initSizeAndPosition": "初始化大小和位置",
     "copyMarkdown": "复制",
     "toggleButtons": "显示/隐藏按钮",
+    "dockToolbar": "吸附顶部",
+    "undockToolbar": "取消吸附",
     "openFileLocation": "打开文件位置",
     "imageLoadFailed": "图片加载失败",
     "copyFile": "复制文件",

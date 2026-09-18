@@ -101,6 +101,8 @@
     "initSizeAndPosition": "Reset size and position",
     "copyMarkdown": "Copy",
     "toggleButtons": "Show/hide buttons",
+    "dockToolbar": "Dock to top",
+    "undockToolbar": "Undock toolbar",
     "openFileLocation": "Show in folder",
     "imageLoadFailed": "Failed to load image",
     "copyFile": "Copy file",

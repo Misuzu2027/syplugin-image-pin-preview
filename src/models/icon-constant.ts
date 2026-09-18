@@ -9,11 +9,11 @@ export const IPP_ICON_SVG = `
     <path d="M8.5 10h5v2h-5z"></path>
 </symbol>
 <symbol id="ippIconActual" viewBox="0 0 24 24">
-    <path d="M5 7h4V5H3v6h2V7zm10-2v2h4v4h2V5h-6zM5 17v-4H3v6h6v-2H5zm16 0h-2v-4h-2v6h6v-2z"></path>
+    <path d="M5 7h4V5H3v6h2V7zm10-2v2h4v4h2V5h-6zM5 17v-4H3v6h6v-2H5zM19 17v-4h2v6h-6v-2h4z"></path>
     <path d="M8.2 9h1.7l1.1 3.2L12.2 9h1.6l-2 6h-1.6L8.2 9z"></path>
 </symbol>
 <symbol id="ippIconFit" viewBox="0 0 24 24">
-    <path d="M4 9V5h4v2H6v2H4zm14-4h4v4h-2V7h-2V5zM4 15h2v2h2v2H4v-4zm16 2h-2v-2h-2v-2h4v4z"></path>
+    <path d="M4 9V5h4v2H6v2H4zm14-4h4v4h-2V7h-2V5zM4 15h2v2h2v2H4v-4zM20 15h-2v2h-2v2h4v-4z"></path>
     <path d="M8 8h8v8H8z"></path>
 </symbol>
 <symbol id="ippIconRotateLeft" viewBox="0 0 24 24">
@@ -44,6 +44,9 @@ export const IPP_ICON_SVG = `
 </symbol>
 <symbol id="ippIconCopyPNG" viewBox="0 0 24 24">
     <path d="M5 5h14v14H5V5zm2 10.2 2.6-3.3 2.1 2.5 1.7-2.1L17 15.2H7zM8.6 8.4a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4z"></path>
+</symbol>
+<symbol id="ippIconDock" viewBox="0 0 24 24">
+    <path d="M16 12.2V5h1V3H7v2h1v7.2L6 14.5V16.5h5V21h2v-4.5h5v-2l-2-2.3z"></path>
 </symbol>
 `;
 
