@@ -1,6 +1,7 @@
 ﻿<script lang="ts">
     import { openBy } from "@/libs/siyuan/editor/util";
     import { MenuItem } from "@/libs/siyuan/menus/Menu";
+    import { isInAndroid, isInHarmony, openByMobile } from "@/libs/siyuan/protyle/util/compatibility";
     import { copyAssetFile, copyPNGByLink, exportAsset, getCopyFilePath } from "@/libs/siyuan/menus/util";
     import { canCopyImageToClipboard, copyPlainText, notifyCopyFailed, notifyCopySuccess } from "@/utils/clipboard";
     import { isLocalPath } from "@/libs/siyuan/util/pathName";
@@ -120,7 +121,7 @@
     $: toolbarLarge = visual.width >= TOOLBAR_LARGE_MIN_WIDTH && visual.height >= TOOLBAR_LARGE_MIN_HEIGHT;
     $: toolbarDocked = showOverlayTools && (dockToolbar || !toolbarLarge);
     $: showOverlayNav = showOptionButton && images.length > 1 && visual.width >= NAV_MIN_WIDTH && visual.height >= NAV_MIN_HEIGHT;
-    $: showOverlayClose = visual.width >= CLOSE_MIN_SIZE && visual.height >= CLOSE_MIN_SIZE;
+    $: showOverlayClose = showOptionButton && visual.width >= CLOSE_MIN_SIZE && visual.height >= CLOSE_MIN_SIZE;
     $: showOverlayIndex = showOptionButton && visual.width >= INDEX_MIN_WIDTH && visual.height >= INDEX_MIN_HEIGHT;
     $: canShowMeta = showOptionButton && visual.width >= META_MIN_WIDTH && visual.height >= META_MIN_HEIGHT;
     $: showOverlayName = canShowMeta && visual.width >= NAME_MIN_WIDTH;
@@ -148,7 +149,8 @@
         window.addEventListener("touchend", handleWindowTouchEnd, { capture: true, passive: false });
         window.addEventListener("touchcancel", handleWindowTouchEnd, { capture: true, passive: false });
         floatEl?.addEventListener("wheel", handleWheel, { passive: false });
-        floatEl?.addEventListener("keydown", handleKeydown);
+        floatEl?.addEventListener("copy", handleCopyEvent);
+        window.addEventListener("keydown", handleKeydown, true);
         openCurrent(true);
     });
 
@@ -160,8 +162,9 @@
         window.removeEventListener("touchmove", handleWindowTouchMove, true);
         window.removeEventListener("touchend", handleWindowTouchEnd, true);
         window.removeEventListener("touchcancel", handleWindowTouchEnd, true);
+        window.removeEventListener("keydown", handleKeydown, true);
         floatEl?.removeEventListener("wheel", handleWheel);
-        floatEl?.removeEventListener("keydown", handleKeydown);
+        floatEl?.removeEventListener("copy", handleCopyEvent);
         clearTimeout(longPressTimeout);
         clearTimeout(flashTimer);
     });
@@ -490,6 +493,7 @@
         if (isPinching || (dragPointerId !== null && event.pointerId !== dragPointerId)) {
             return;
         }
+        floatEl?.focus();
         window.siyuan?.menus?.menu?.remove();
         const pos = pointerPos(event);
         const now = Date.now();
@@ -635,9 +639,49 @@
         openContextMenu(getEventPosition(event));
     }
 
+    function isPreviewSelected(): boolean {
+        const active = document.activeElement;
+        return !!floatEl && !!active && (active === floatEl || floatEl.contains(active));
+    }
+
+    function hasOverlayTextSelection(): boolean {
+        const selection = window.getSelection();
+        if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+            return false;
+        }
+        const node = selection.anchorNode;
+        return !!node && !!floatEl?.contains(node);
+    }
+
+    function copyCurrentFile() {
+        const src = currentSrc || images[currentIndex] || "";
+        if (showCopyFile) {
+            copyAssetFile(src);
+            return;
+        }
+        if (showCopyPNG) {
+            copyPNGByLink(src);
+            return;
+        }
+        notifyCopyFailed("file");
+    }
+
+    function handleCopyEvent(event: ClipboardEvent) {
+        if (!isPreviewSelected() || hasOverlayTextSelection()) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        copyCurrentFile();
+    }
+
     function handleKeydown(event: KeyboardEvent) {
+        if (!isPreviewSelected()) {
+            return;
+        }
         event.stopPropagation();
         const key = event.key.toLowerCase();
+        const mod = event.ctrlKey || event.metaKey;
         if (event.key === "Escape") {
             event.preventDefault();
             handleCloseClick();
@@ -693,8 +737,9 @@
             flip("v");
             return;
         }
-        if (event.ctrlKey && event.shiftKey && key === "c") {
+        if (mod && event.shiftKey && key === "c") {
             event.preventDefault();
+            event.stopImmediatePropagation();
             if (!showCopyPNG) {
                 notifyCopyFailed("permission");
                 return;
@@ -702,9 +747,13 @@
             copyPNGByLink(currentSrc);
             return;
         }
-        if (event.ctrlKey && key === "c") {
+        if (mod && key === "c") {
+            if (hasOverlayTextSelection()) {
+                return;
+            }
             event.preventDefault();
-            copyPlainText(`![](${currentSrc})`).then((ok) => ok ? notifyCopySuccess() : notifyCopyFailed("text"));
+            event.stopImmediatePropagation();
+            copyCurrentFile();
         }
     }
 
@@ -800,6 +849,15 @@
                 icon: "iconOpen",
                 label: window.siyuan.languages.useDefault,
                 click: () => openBy(currentSrc, "app"),
+            }).element);
+        }
+        if ((frontend === "mobile" || frontend === "browser-mobile") && currentSrc) {
+            const useSystemApp = isInAndroid() || isInHarmony();
+            menu.append(new MenuItem({
+                id: useSystemApp ? "useDefault" : "useBrowserView",
+                icon: "iconOpen",
+                label: useSystemApp ? window.siyuan.languages.useDefault : window.siyuan.languages.useBrowserView,
+                click: () => openByMobile(currentSrc),
             }).element);
         }
         menu.append(new MenuItem({

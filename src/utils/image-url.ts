@@ -22,6 +22,18 @@ const parseAssetURL = (url: string): AssetURLParts | undefined => {
     };
 };
 
+/** 与思源导出一致：给资源地址加上 `download=true`。 */
+export function getDownloadURL(url: string): string {
+    const fragmentIndex = url.indexOf("#");
+    const fragment = fragmentIndex === -1 ? "" : url.substring(fragmentIndex);
+    const urlWithoutFragment = fragmentIndex === -1 ? url : url.substring(0, fragmentIndex);
+    const queryIndex = urlWithoutFragment.indexOf("?");
+    const path = queryIndex === -1 ? urlWithoutFragment : urlWithoutFragment.substring(0, queryIndex);
+    const parameters = new URLSearchParams(queryIndex === -1 ? "" : urlWithoutFragment.substring(queryIndex + 1));
+    parameters.set("download", "true");
+    return `${path}?${parameters.toString()}${fragment}`;
+}
+
 /** 去掉思源缩略图参数 `style=thumb`，与内核预览对齐。 */
 export function removeCompressURL(url: string): string {
     if (!url) {

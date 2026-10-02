@@ -1,11 +1,20 @@
 import { Constants, fetchPost, getFrontend } from "siyuan";
 import { getAssetName, pathPosix } from "../util/pathName";
 import { isBrowser, isMobileClient as isMobile } from "@/utils/electron-util";
-import { exportByMobile, isInAndroid } from "../protyle/util/compatibility";
+import { exportByMobile, isInAndroid, saveExportFile } from "../protyle/util/compatibility";
 import { canCopyImageToClipboard, notifyCopyFailed, notifyCopySuccess, writePNGBlob } from "@/utils/clipboard";
+import { getDownloadURL } from "@/utils/image-url";
 
 
 export const exportAsset = async (src: string) => {
+    const frontend = getFrontend();
+    if (frontend === "mobile" || frontend === "browser-mobile") {
+        if (src) {
+            await saveExportFile(getDownloadURL(src));
+        }
+        return;
+    }
+
     let electron = null;
     if (window && window.require) {
         electron = window.require('electron');
