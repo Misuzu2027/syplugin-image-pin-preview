@@ -200,6 +200,38 @@ export async function getCurrentAttrViewImages(
     return Array.isArray(result) ? result : [];
 }
 
+export async function renameAsset(oldPath: string, newName: string): Promise<string | undefined> {
+    const response = await fetchSyncPost("/api/asset/renameAsset", { oldPath, newName });
+    if (response.code !== 0) {
+        if (response.msg) {
+            window.showMessage?.(response.msg, 5000, "error");
+        }
+        return;
+    }
+    const newPath = response.data?.newPath;
+    return typeof newPath === "string" && newPath ? newPath : undefined;
+}
+
+export async function getImageOCRText(path: string): Promise<string> {
+    const result = await request("/api/asset/getImageOCRText", { path });
+    return typeof result?.text === "string" ? result.text : "";
+}
+
+export async function setImageOCRText(path: string, text: string): Promise<void> {
+    await request("/api/asset/setImageOCRText", { path, text });
+}
+
+export async function ocrAsset(path: string): Promise<string | undefined> {
+    const response = await fetchSyncPost("/api/asset/ocr", { path });
+    if (response.code !== 0) {
+        if (response.msg) {
+            window.showMessage?.(response.msg, 7000, "error");
+        }
+        return;
+    }
+    return typeof response.data?.text === "string" ? response.data.text : "";
+}
+
 
 
 // **************************************** Block ****************************************

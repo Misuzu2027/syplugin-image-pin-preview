@@ -8,32 +8,67 @@ export function getVisualSize(naturalWidth: number, naturalHeight: number, scale
     return getRotatedSize(Math.max(1, naturalWidth * scale), Math.max(1, naturalHeight * scale), rotate);
 }
 
-const META_SCALE_REF_WIDTH = 420;
-const META_SCALE_REF_HEIGHT = 240;
-const META_SCALE_MIN = 0.55;
+export const PREVIEW_CHROME_HEAD = 0;
+export const PREVIEW_CHROME_INFO = 28;
+export const PREVIEW_CHROME_TOOLS = 40;
+export const PREVIEW_CHROME_FOOT = PREVIEW_CHROME_INFO + PREVIEW_CHROME_TOOLS;
+const PREVIEW_TOOL_BUTTON = 32;
+const PREVIEW_TOOL_GAP = 2;
+const PREVIEW_TOOL_PAD_X = 8;
 
-/** 信息条随图片可视盒子缩放，限制在可读范围内。 */
-export function getMetaScale(width: number, height: number): number {
-    const byWidth = width / META_SCALE_REF_WIDTH;
-    const byHeight = height / META_SCALE_REF_HEIGHT;
-    return Math.min(1, Math.max(META_SCALE_MIN, Math.min(byWidth, byHeight)));
+/** 底栏按钮单行排开时需要的宽度，含左右内边距。 */
+export function previewToolMinWidth(buttonCount: number): number {
+    const count = Math.max(1, buttonCount);
+    return count * PREVIEW_TOOL_BUTTON + (count - 1) * PREVIEW_TOOL_GAP + PREVIEW_TOOL_PAD_X * 2;
+}
+
+export interface PreviewFrame {
+    width: number;
+    height: number;
+    offsetX: number;
+    offsetY: number;
+}
+
+/** 卡片外框。窄图时加宽到能放下底栏，画面在卡片里水平居中。 */
+export function getPreviewFrame(
+    imageWidth: number,
+    imageHeight: number,
+    chrome: { head: number; foot: number; minWidth: number },
+): PreviewFrame {
+    const width = Math.max(imageWidth, chrome.minWidth);
+    return {
+        width,
+        height: chrome.head + imageHeight + chrome.foot,
+        offsetX: (width - imageWidth) / 2,
+        offsetY: chrome.head,
+    };
 }
 
 const VIEW_FIT_RATIO = 0.9;
 
 /** 刚好放进屏幕的最大缩放，小图可以大于 1。 */
-export function getViewportContainScale(naturalWidth: number, naturalHeight: number, rotate = 0): number {
+export function getViewportContainScale(
+    naturalWidth: number,
+    naturalHeight: number,
+    rotate = 0,
+    reservedHeight = 0,
+): number {
     if (!naturalWidth || !naturalHeight) {
         return 1;
     }
     const maxWidth = window.innerWidth * VIEW_FIT_RATIO;
-    const maxHeight = window.innerHeight * VIEW_FIT_RATIO;
+    const maxHeight = Math.max(1, window.innerHeight * VIEW_FIT_RATIO - Math.max(0, reservedHeight));
     const visual = getRotatedSize(naturalWidth, naturalHeight, rotate);
     return Math.min(maxWidth / visual.width, maxHeight / visual.height);
 }
 
-export function getViewportFitScale(naturalWidth: number, naturalHeight: number, rotate = 0): number {
-    return Math.min(getViewportContainScale(naturalWidth, naturalHeight, rotate), 1);
+export function getViewportFitScale(
+    naturalWidth: number,
+    naturalHeight: number,
+    rotate = 0,
+    reservedHeight = 0,
+): number {
+    return Math.min(getViewportContainScale(naturalWidth, naturalHeight, rotate, reservedHeight), 1);
 }
 
 export function clampDisplayScale(scale: number, naturalWidth: number, minWidth = 80, maxTimes = 100): number {
@@ -138,12 +173,13 @@ export function switchDisplayScale(
     naturalHeight: number,
     keepWidth: number,
     rotate = 0,
+    reservedHeight = 0,
 ): number {
     if (!naturalWidth) {
         return 1;
     }
     const keepWidthScale = keepWidth / naturalWidth;
-    const containScale = getViewportContainScale(naturalWidth, naturalHeight, rotate);
+    const containScale = getViewportContainScale(naturalWidth, naturalHeight, rotate, reservedHeight);
     return clampDisplayScale(Math.min(keepWidthScale, containScale), naturalWidth);
 }
 
@@ -177,94 +213,6 @@ export function containFloatInViewport(
     }
 
     return { x: nextX, y: nextY };
-}
-
-function round2(value: number): number {
-    return Math.round(value * 100) / 100;
-}
-
-export interface DockedShape {
-    /** 单侧内凹圆角的实际半径，形状需要向两侧各外扩这么多。 */
-    fillet: number;
-    width: number;
-    height: number;
-    path: string;
-}
-
-/**
- * 吸附条的整体轮廓：顶边两端用内凹圆角与图片边缘相接，底部是大圆角。
- * 整条轮廓是一条闭合路径，避免多层半透明背景叠加出接缝。
- * 内凹圆角要与侧边相切才不会露出方角，所以底部圆角最多只能取 height - fillet。
- */
-export function getDockedShape(width: number, height: number, fillet: number, radius = height): DockedShape {
-    const w = Math.max(0, width);
-    const h = Math.max(0, height);
-    const f = Math.max(0, Math.min(fillet, h, w / 2));
-    const r = Math.max(0, Math.min(radius, h - f, w / 2));
-    const total = round2(w + f * 2);
-    if (w <= 0 || h <= 0) {
-        return { fillet: f, width: total, height: h, path: "" };
-    }
-    const arcIn = (x: number, y: number) => `A${round2(f)} ${round2(f)} 0 0 0 ${round2(x)} ${round2(y)}`;
-    const arcOut = (x: number, y: number) => `A${round2(r)} ${round2(r)} 0 0 1 ${round2(x)} ${round2(y)}`;
-    const path = ["M0 0", `H${total}`];
-    if (f > 0) {
-        path.push(arcIn(total - f, f));
-    }
-    path.push(`V${round2(h - r)}`);
-    if (r > 0) {
-        path.push(arcOut(total - f - r, h));
-    }
-    path.push(`H${round2(f + r)}`);
-    if (r > 0) {
-        path.push(arcOut(f, h - r));
-    }
-    path.push(`V${round2(f)}`);
-    if (f > 0) {
-        path.push(arcIn(0, 0));
-    }
-    path.push("Z");
-    return { fillet: f, width: total, height: h, path: path.join(" ") };
-}
-
-/**
- * 角落吸附面板的轮廓：两条外边贴住图片的侧边与底边，相接处同样用内凹圆角过渡，朝图片内侧的那个角是凸圆角。
- * side 为面板贴住的水平方向，形状会向图片内侧外扩一个 fillet。
- */
-export function getDockedCornerShape(
-    width: number,
-    height: number,
-    fillet: number,
-    radius: number,
-    side: "left" | "right" = "left",
-): DockedShape {
-    const w = Math.max(0, width);
-    const h = Math.max(0, height);
-    const f = Math.max(0, Math.min(fillet, w, h));
-    const r = Math.max(0, Math.min(radius, w - f, h - f));
-    const total = round2(w + f);
-    const totalHeight = round2(h + f);
-    if (w <= 0 || h <= 0) {
-        return { fillet: f, width: total, height: totalHeight, path: "" };
-    }
-    const mirrored = side === "right";
-    const px = (x: number) => round2(mirrored ? total - x : x);
-    const sweepIn = mirrored ? 1 : 0;
-    const sweepOut = mirrored ? 0 : 1;
-    const path = [`M${px(0)} 0`];
-    if (f > 0) {
-        path.push(`A${round2(f)} ${round2(f)} 0 0 ${sweepIn} ${px(f)} ${round2(f)}`);
-    }
-    path.push(`H${px(w - r)}`);
-    if (r > 0) {
-        path.push(`A${round2(r)} ${round2(r)} 0 0 ${sweepOut} ${px(w)} ${round2(f + r)}`);
-    }
-    path.push(`V${round2(h)}`);
-    if (f > 0) {
-        path.push(`A${round2(f)} ${round2(f)} 0 0 ${sweepIn} ${px(w + f)} ${totalHeight}`);
-    }
-    path.push(`H${px(0)}`, "Z");
-    return { fillet: f, width: total, height: totalHeight, path: path.join(" ") };
 }
 
 export function imageFlipCss(rotate: number, flipH: boolean, flipV: boolean): string {

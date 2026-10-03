@@ -3,11 +3,12 @@ import { SettingService } from "../setting/SettingService";
 import ImagePreviewerSvelte from "@/components/image/ImagePreviewer.svelte";
 import { getCurrentAttrViewImages, getDocImageAssets } from "@/utils/api";
 import { SvelteComponent } from "svelte";
-import { ensureCurrentInList, findImageIndex, removeCompressURL, sameImageList } from "@/utils/image-url";
+import { ensureCurrentInList, findImageIndex, removeCompressURL, replaceAssetInSrc, sameImageList } from "@/utils/image-url";
 
 interface ImagePreviewerInstance extends SvelteComponent {
     getCurrentSrc: () => string;
     flashHighlight: () => void;
+    replaceAssetSrc: (oldPath: string, newPath: string) => void;
 }
 
 interface PreviewSession {
@@ -168,6 +169,9 @@ async function handleCaptureClick(event: MouseEvent) {
     if (!isPluginOpen() || event.button !== 0 || isInsidePreviewer(event.target)) {
         return;
     }
+    if (event.altKey) {
+        return;
+    }
     const image = asImageElement(event.target);
     if (!image) {
         return;
@@ -186,6 +190,9 @@ async function handleCaptureClick(event: MouseEvent) {
 
 async function handleCaptureDblClick(event: MouseEvent) {
     if (!isPluginOpen() || isInsidePreviewer(event.target)) {
+        return;
+    }
+    if (event.altKey) {
         return;
     }
     const image = asImageElement(event.target);
@@ -291,6 +298,7 @@ export function previewImages(images: string[], startIndex = 0, imageTitles: str
             imageTitles,
             startIndex,
             handleCloseClick: session.closer,
+            onAssetPathReplaced: replacePreviewAssetPath,
         },
     }) as ImagePreviewerInstance;
 }
@@ -331,6 +339,13 @@ function focusExistingPreview(images: string[], currentSrc: string): boolean {
     bringHostToFront(session.container);
     session.component?.flashHighlight();
     return true;
+}
+
+function replacePreviewAssetPath(oldPath: string, newPath: string) {
+    for (const session of previewSessions) {
+        session.images = session.images.map((src) => replaceAssetInSrc(src, oldPath, newPath));
+        session.component?.replaceAssetSrc(oldPath, newPath);
+    }
 }
 
 function bringHostToFront(host: HTMLElement) {

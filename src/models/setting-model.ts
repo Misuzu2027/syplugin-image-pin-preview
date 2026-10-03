@@ -9,7 +9,9 @@ export class SettingConfig {
 
     showOptionButton: Boolean;
 
-    dockToolbar: Boolean;
+    showImageNav: Boolean;
+
+    collapseToolbar: Boolean;
 
 }
 

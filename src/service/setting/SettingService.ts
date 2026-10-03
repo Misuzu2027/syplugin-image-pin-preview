@@ -98,7 +98,6 @@ async function getPersistentConfig(): Promise<SettingConfig> {
 
 function setKeyValue(settingConfig, key: any, value: any) {
     if (!(key in settingConfig)) {
-        console.error(`"${key}" is not a setting`);
         return;
     }
     settingConfig[key] = value;
@@ -111,7 +110,8 @@ function getDefaultSettingConfig() {
     defaultConfig.isOpen = true;
 
     defaultConfig.showOptionButton = true;
-    defaultConfig.dockToolbar = true;
+    defaultConfig.showImageNav = true;
+    defaultConfig.collapseToolbar = true;
     return defaultConfig;
 }
 

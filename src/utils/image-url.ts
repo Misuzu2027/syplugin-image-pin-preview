@@ -134,6 +134,54 @@ export function ensureCurrentInList(list: string[], current: string): { images: 
     return { images, index };
 }
 
+/** 同源 assets 路径。加密笔记本资源返回空，调用方不提供重命名和 OCR。 */
+export function getPreviewAssetPath(src: string): string | undefined {
+    if (!src) {
+        return;
+    }
+    try {
+        const url = new URL(src, `${window.location.origin}/`);
+        const path = decodeURIComponent(url.pathname);
+        const box = url.searchParams.get("box");
+        if (url.origin !== window.location.origin || !["http:", "https:"].includes(url.protocol)
+            || !path.startsWith("/assets/") || path.includes("\\") || path.split("/").includes("..")) {
+            return;
+        }
+        if (box && window.siyuan?.notebooks?.some((item) => item.id === box && item.encrypted)) {
+            return;
+        }
+        return path.substring(1) + (box ? `?box=${encodeURIComponent(box)}` : "");
+    } catch {
+        return;
+    }
+}
+
+/** 把预览地址里的资源路径换成重命名后的新路径，保留原有查询和片段。 */
+export function replaceAssetInSrc(src: string, oldPath: string, newPath: string): string {
+    if (!src || !oldPath || !newPath) {
+        return src;
+    }
+    const oldClean = oldPath.split("?")[0];
+    const newClean = newPath.split("?")[0].replace(/\\/g, "/");
+    try {
+        const url = new URL(src, `${window.location.origin}/`);
+        const path = decodeURIComponent(url.pathname).replace(/^\//, "");
+        if (path !== oldClean) {
+            return src;
+        }
+        const nextPath = `/${newClean}`;
+        if (/^https?:/i.test(src)) {
+            return `${url.origin}${nextPath}${url.search}${url.hash}`;
+        }
+        if (src.startsWith("/")) {
+            return `${nextPath}${url.search}${url.hash}`;
+        }
+        return `${newClean}${url.search}${url.hash}`;
+    } catch {
+        return src;
+    }
+}
+
 /** 与思源 Viewer 一致：去掉扩展名和资源 ID 后缀 `-\d{14}-\w{7}`。 */
 export function getDisplayImageName(src: string): string {
     if (!src) {

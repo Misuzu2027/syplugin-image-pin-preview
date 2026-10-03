@@ -12,7 +12,8 @@ export function getSettingTabArray(): TabProperty[] {
             key: "image-pin-preview-default", name: "默认", iconKey: "iconFilter", props: [
                 new ItemProperty({ key: "isOpen", type: "switch", name: "开启", description: "", tips: "" }), 
                 new ItemProperty({ key: "showOptionButton", type: "switch", name: "图片显示操作按钮", description: "", tips: "" }),
-                new ItemProperty({ key: "dockToolbar", type: "switch", name: "工具栏默认吸附顶部", description: "", tips: "" }), 
+                new ItemProperty({ key: "showImageNav", type: "switch", name: "显示图片内图标", description: "", tips: "" }),
+                new ItemProperty({ key: "collapseToolbar", type: "switch", name: "工具栏默认折叠", description: "悬浮在底部时展开", tips: "" }), 
             ]
 
         }),

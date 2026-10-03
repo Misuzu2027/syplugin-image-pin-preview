@@ -18,6 +18,7 @@ Double-click images in the editor, or click images in a database, to pin the ima
 ## Tips
 
 * Hold `Ctrl` when opening to preview only images already loaded in the current editor or database view
+* Hold `Alt` (Option on macOS) and use the usual gesture to open SiYuan’s native preview: double-click in the editor, single-click in a database or preview mode
 * `Esc` closes; `←` `→` or `A` `D` switches images
 * `R` / `L` rotate, `H` / `V` flip, `0` fit, `1` actual size
 * Double-click the image to toggle fit and the last zoom
