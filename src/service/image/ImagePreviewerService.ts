@@ -22,6 +22,13 @@ export function previewToolMinWidth(buttonCount: number): number {
     return count * PREVIEW_TOOL_BUTTON + (count - 1) * PREVIEW_TOOL_GAP + PREVIEW_TOOL_PAD_X * 2;
 }
 
+/** 当前宽度能排开的底栏按钮个数。 */
+export function previewToolCapacity(width: number): number {
+    const slot = PREVIEW_TOOL_BUTTON + PREVIEW_TOOL_GAP;
+    const count = Math.floor((width - PREVIEW_TOOL_PAD_X * 2 + PREVIEW_TOOL_GAP) / slot);
+    return Math.max(1, count);
+}
+
 export interface PreviewFrame {
     width: number;
     height: number;

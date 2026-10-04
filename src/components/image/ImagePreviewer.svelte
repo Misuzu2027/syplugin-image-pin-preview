@@ -30,7 +30,7 @@
         PREVIEW_CHROME_FOOT,
         PREVIEW_CHROME_INFO,
         PREVIEW_CHROME_TOOLS,
-        previewToolMinWidth,
+        previewToolCapacity,
         switchDisplayScale,
         zoomKeepPoint,
     } from "@/service/image/ImagePreviewerService";
@@ -49,10 +49,16 @@
     const MIN_WIDTH = 80;
     const NAV_MIN_WIDTH = 168;
     const NAV_MIN_HEIGHT = 96;
-    const CLOSE_MIN_SIZE = 88;
-    const INFO_MIN_WIDTH = 160;
-    const BASE_TOOL_COUNT = 10;
     const NAME_LIMIT = 18;
+    const isMobile = EnvConfig.ins.isMobile;
+
+    interface PreviewToolAction {
+        id: string;
+        label: string;
+        icon: string;
+        active: boolean;
+        run: () => void;
+    }
 
     let showOptionButton = SettingService.ins.SettingConfig?.showOptionButton !== false;
     let showImageNav = SettingService.ins.SettingConfig?.showImageNav !== false;
@@ -105,21 +111,18 @@
     $: titleLabel = clipLabel(distinctTitle);
     $: showCopyFile = !!getCopyFilePath(currentSrc || images[currentIndex] || "");
     $: showCopyPNG = !showCopyFile && canCopyImageToClipboard();
-    $: showExport = !showCopyFile && !showCopyPNG;
     $: showZoomButtons = !["desktop", "desktop-window"].includes(getFrontend());
-    $: toolButtonCount = (showZoomButtons ? BASE_TOOL_COUNT : BASE_TOOL_COUNT - 2) + 1;
-    $: toolMinWidth = previewToolMinWidth(toolButtonCount);
-    $: showInfo = showOptionButton && visual.width >= INFO_MIN_WIDTH;
-    $: showToolsRow = showOptionButton && visual.width >= toolMinWidth;
-    $: toolsExpanded = showToolsRow && (!collapseToolbar || toolsOpen || toolsPinned);
-    $: chromeHeight = !showInfo ? 0 : ((showToolsRow && (!collapseToolbar || toolsPinned)) ? PREVIEW_CHROME_FOOT : PREVIEW_CHROME_INFO);
+    $: toolsExpanded = showOptionButton && (isMobile || !collapseToolbar || toolsOpen || toolsPinned);
     $: frame = getPreviewFrame(visual.width, visual.height, {
         head: 0,
-        foot: !showInfo ? 0 : (toolsExpanded ? PREVIEW_CHROME_FOOT : PREVIEW_CHROME_INFO),
+        foot: showOptionButton ? (toolsExpanded ? PREVIEW_CHROME_FOOT : PREVIEW_CHROME_INFO) : 0,
         minWidth: 0,
     });
     $: showOverlayNav = showOptionButton && showImageNav && images.length > 1 && visual.width >= NAV_MIN_WIDTH && visual.height >= NAV_MIN_HEIGHT;
-    $: showOverlayClose = showOptionButton && showImageNav && visual.width >= CLOSE_MIN_SIZE && visual.height >= CLOSE_MIN_SIZE;
+    $: showOverlayClose = showOptionButton && (isMobile || showImageNav);
+    $: toolActions = collectToolActions(showZoomButtons, showCopyFile, showCopyPNG, rotate, flipH, flipV, showImageNav, toolsPinned);
+    $: shownTools = visibleToolActions(toolActions, visual.width);
+    $: toolsOverflow = shownTools.length < toolActions.length;
 
     let copiedTipKey = "";
     let copiedTimer: ReturnType<typeof setTimeout> | undefined;
@@ -188,20 +191,25 @@
         return EnvConfig.ins.i18n?.[pluginKey] || fallback;
     }
 
-    function chromeSpec(imageWidth: number) {
-        const toolMin = previewToolMinWidth(toolButtonCount);
-        const info = showOptionButton && imageWidth >= INFO_MIN_WIDTH;
-        const toolsFit = showOptionButton && imageWidth >= toolMin;
-        const expanded = toolsFit && (!collapseToolbar || toolsOpen || toolsPinned);
+    function chromeSpec() {
+        const expanded = showOptionButton && (isMobile || !collapseToolbar || toolsOpen || toolsPinned);
         return {
             head: 0,
-            foot: !info ? 0 : (expanded ? PREVIEW_CHROME_FOOT : PREVIEW_CHROME_INFO),
+            foot: showOptionButton ? (expanded ? PREVIEW_CHROME_FOOT : PREVIEW_CHROME_INFO) : 0,
             minWidth: 0,
         };
     }
 
     function frameFor(imageWidth: number, imageHeight: number) {
-        return getPreviewFrame(imageWidth, imageHeight, chromeSpec(imageWidth));
+        return getPreviewFrame(imageWidth, imageHeight, chromeSpec());
+    }
+
+    function fitReservedFoot() {
+        return showOptionButton ? PREVIEW_CHROME_FOOT : 0;
+    }
+
+    function containHeightFor(imageHeight: number, frameHeight: number) {
+        return Math.max(frameHeight, imageHeight + fitReservedFoot());
     }
 
     function stageRect() {
@@ -220,7 +228,7 @@
             y: imageY - nextFrame.offsetY,
         };
         position = stayOnScreen
-            ? containFloatInViewport(card.x, card.y, nextFrame.width, nextFrame.height)
+            ? containFloatInViewport(card.x, card.y, nextFrame.width, containHeightFor(imageHeight, nextFrame.height))
             : clampFloatPosition(card.x, card.y, nextFrame.width, nextFrame.height);
     }
 
@@ -231,9 +239,10 @@
     function placeAtCenter(nextScale = displayScale, nextRotate = rotate) {
         const size = getVisualSize(naturalW, naturalH, nextScale, nextRotate);
         const nextFrame = frameFor(size.width, size.height);
+        const reservedHeight = containHeightFor(size.height, nextFrame.height);
         const x = (window.innerWidth - nextFrame.width) / 2;
-        const y = (window.innerHeight - nextFrame.height) / 2;
-        position = containFloatInViewport(x, y, nextFrame.width, nextFrame.height);
+        const y = (window.innerHeight - reservedHeight) / 2;
+        position = containFloatInViewport(x, y, nextFrame.width, reservedHeight);
     }
 
     function keepCurrentCenter(nextScale: number, nextRotate = rotate, stayOnScreen = false) {
@@ -268,6 +277,133 @@
         toolsOpen = true;
     }
 
+    function openToolsOverflow(event: MouseEvent) {
+        openContextMenu({ x: event.clientX, y: event.clientY });
+    }
+
+    function collectToolActions(
+        zoomButtons: boolean,
+        copyFile: boolean,
+        copyPng: boolean,
+        rotation: number,
+        flippedH: boolean,
+        flippedV: boolean,
+        imageNav: boolean,
+        pinned: boolean,
+    ): PreviewToolAction[] {
+        const actions: PreviewToolAction[] = [{
+            id: "fit",
+            label: t("fitWindow", "适应窗口", "reset"),
+            icon: "#iconRefresh",
+            active: false,
+            run: fitToViewport,
+        }];
+        if (zoomButtons) {
+            actions.push(
+                {
+                    id: "zoomIn",
+                    label: t("zoomIn", "放大", "zoomIn"),
+                    icon: "#iconAdd",
+                    active: false,
+                    run: () => setScale(displayScale * 1.2),
+                },
+                {
+                    id: "zoomOut",
+                    label: t("zoomOut", "缩小", "zoomOut"),
+                    icon: "#iconLine",
+                    active: false,
+                    run: () => setScale(displayScale / 1.2),
+                },
+            );
+        }
+        const copyAction: PreviewToolAction = copyFile
+            ? {
+                id: "copyFile",
+                label: window.siyuan.languages.copyFile || t("copyFile", "复制文件"),
+                icon: "#iconFile",
+                active: false,
+                run: () => copyAssetFile(currentSrc),
+            }
+            : copyPng
+                ? {
+                    id: "copyPng",
+                    label: window.siyuan.languages.copyAsPNG || t("copyAsPNG", "复制为 PNG"),
+                    icon: "#iconImage",
+                    active: false,
+                    run: () => copyPNGByLink(currentSrc),
+                }
+                : {
+                    id: "export",
+                    label: window.siyuan.languages.export,
+                    icon: "#iconUpload",
+                    active: false,
+                    run: () => exportAsset(currentSrc),
+                };
+        actions.push(
+            {
+                id: "rotateRight",
+                label: t("rotateRight", "向右旋转", "rotateCw"),
+                icon: "#iconRedo",
+                active: rotation !== 0,
+                run: () => rotateBy(90),
+            },
+            {
+                id: "actual",
+                label: t("actualSize", "实际大小", "pageScaleActual"),
+                icon: "#ippIconActual",
+                active: false,
+                run: () => setActualSize(),
+            },
+            copyAction,
+            {
+                id: "rotateLeft",
+                label: t("rotateLeft", "向左旋转", "rotateCcw"),
+                icon: "#iconUndo",
+                active: rotation !== 0,
+                run: () => rotateBy(-90),
+            },
+            {
+                id: "flipH",
+                label: t("flipHorizontal", "水平翻转", "imageFlipHorizontal"),
+                icon: "#iconSplitLR",
+                active: flippedH,
+                run: () => flip("h"),
+            },
+            {
+                id: "flipV",
+                label: t("flipVertical", "垂直翻转", "imageFlipVertical"),
+                icon: "#iconSplitTB",
+                active: flippedV,
+                run: () => flip("v"),
+            },
+            {
+                id: "imageNav",
+                label: imageNav ? t("hideImageIcons", "隐藏图片内图标") : t("showImageIcons", "显示图片内图标"),
+                icon: imageNav ? "#iconEyeoff" : "#iconEye",
+                active: !imageNav,
+                run: toggleImageNav,
+            },
+        );
+        if (!isMobile) {
+            actions.push({
+                id: "pin",
+                label: pinned ? t("unpinToolbar", "取消钉住工具栏") : t("pinToolbar", "钉住工具栏"),
+                icon: pinned ? "#iconUnpin" : "#iconPin",
+                active: pinned,
+                run: toggleToolsPin,
+            });
+        }
+        return actions;
+    }
+
+    function visibleToolActions(actions: PreviewToolAction[], width: number): PreviewToolAction[] {
+        const capacity = previewToolCapacity(width);
+        if (capacity >= actions.length) {
+            return actions;
+        }
+        return actions.slice(0, Math.max(0, capacity - 1));
+    }
+
     function setScale(nextScale: number, zoomPosition?: Vector2) {
         markSizing();
         const scale = clampDisplayScale(nextScale, naturalW, MIN_WIDTH);
@@ -283,7 +419,7 @@
     }
 
     function fitToViewport() {
-        const scale = getViewportFitScale(naturalW, naturalH, rotate, chromeHeight);
+        const scale = getViewportFitScale(naturalW, naturalH, rotate, fitReservedFoot());
         displayScale = scale;
         lastCustomScale = 0;
         keepCurrentCenter(scale, rotate, true);
@@ -294,7 +430,7 @@
     }
 
     function toggleFitOrActual(pos: Vector2) {
-        const fitScale = getViewportFitScale(naturalW, naturalH, rotate, chromeHeight);
+        const fitScale = getViewportFitScale(naturalW, naturalH, rotate, fitReservedFoot());
         if (Math.abs(displayScale - fitScale) > 0.02) {
             const custom = displayScale;
             setScale(fitScale, pos);
@@ -307,7 +443,7 @@
 
     function rotateBy(delta: number) {
         const nextRotate = (rotate + delta + 360) % 360;
-        const nextScale = Math.min(displayScale, getViewportContainScale(naturalW, naturalH, nextRotate, chromeHeight));
+        const nextScale = Math.min(displayScale, getViewportContainScale(naturalW, naturalH, nextRotate, fitReservedFoot()));
         keepCurrentCenter(nextScale, nextRotate, true);
         displayScale = nextScale;
         rotate = nextRotate;
@@ -354,13 +490,13 @@
             flipH = false;
             flipV = false;
             if (isFirst || !ready) {
-                displayScale = getViewportFitScale(naturalW, naturalH, 0, chromeHeight);
+                displayScale = getViewportFitScale(naturalW, naturalH, 0, fitReservedFoot());
                 lastCustomScale = 0;
                 placeAtCenter(displayScale, 0);
                 ready = true;
                 requestAnimationFrame(() => floatEl?.focus());
             } else {
-                displayScale = switchDisplayScale(naturalW, naturalH, keepWidth, 0, chromeHeight);
+                displayScale = switchDisplayScale(naturalW, naturalH, keepWidth, 0, fitReservedFoot());
                 const nextSize = getVisualSize(naturalW, naturalH, displayScale, 0);
                 const next = keepCenter(
                     oldStage.left,
@@ -808,7 +944,7 @@
     }
 
     function initSizeAndPosition() {
-        displayScale = getViewportFitScale(naturalW, naturalH, 0, chromeHeight);
+        displayScale = getViewportFitScale(naturalW, naturalH, 0, fitReservedFoot());
         rotate = 0;
         flipH = false;
         flipV = false;
@@ -1088,6 +1224,7 @@
 <div
     bind:this={floatEl}
     class="ipp-float"
+    class:ipp-float--mobile={isMobile}
     class:ipp-float--ready={ready}
     class:ipp-float--dragging={isDragging}
     class:ipp-float--instant={isDragging || isPinching || sizing}
@@ -1101,6 +1238,11 @@
     on:touchmove|stopPropagation={handleTouchMove}
     on:touchend|stopPropagation={handleTouchEnd}
 >
+    {#if showOverlayClose}
+        <button type="button" class="ipp-btn ipp-nav ipp-nav--close" aria-label={t("closeImage", "关闭图片", "close")} on:click|stopPropagation={handleCloseClick} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+            <svg class="ipp-icon"><use xlink:href="#ippIconClose"></use></svg>
+        </button>
+    {/if}
     <div class="ipp-body">
         <div class="ipp-stage" style="width:{visual.width}px;height:{visual.height}px">
             {#if currentSrc}
@@ -1116,11 +1258,6 @@
             {#if loadError}
                 <div class="ipp-status">{t("imageLoadFailed", "图片加载失败")}</div>
             {/if}
-            {#if showOverlayClose}
-                <button type="button" class="ipp-btn ipp-nav ipp-nav--close" aria-label={t("closeImage", "关闭图片", "close")} on:click|stopPropagation={handleCloseClick} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                    <svg class="ipp-icon"><use xlink:href="#ippIconClose"></use></svg>
-                </button>
-            {/if}
             {#if showOverlayNav}
                 <button type="button" class="ipp-btn ipp-nav ipp-nav--prev" title={t("prevImage", "上一张", "previous")} on:click|stopPropagation={handlePrev} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
                     <svg class="ipp-icon"><use xlink:href="#ippIconPrev"></use></svg>
@@ -1132,7 +1269,7 @@
         </div>
     </div>
 
-    {#if showInfo}
+    {#if showOptionButton}
         <div
             class="ipp-foot"
             class:ipp-foot--tools={toolsExpanded}
@@ -1184,67 +1321,31 @@
                 {/if}
             </div>
             <div class="ipp-tools">
-            {#if showZoomButtons}
-            <button type="button" class="ipp-btn" aria-label={t("zoomIn", "放大", "zoomIn")} on:click|stopPropagation={() => setScale(displayScale * 1.2)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon ipp-icon--line"><use xlink:href="#iconAdd"></use></svg>
-            </button>
-            <button type="button" class="ipp-btn" aria-label={t("zoomOut", "缩小", "zoomOut")} on:click|stopPropagation={() => setScale(displayScale / 1.2)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon ipp-icon--line"><use xlink:href="#iconLine"></use></svg>
-            </button>
-            {/if}
-            <button type="button" class="ipp-btn" aria-label={t("actualSize", "实际大小", "pageScaleActual")} on:click|stopPropagation={() => setActualSize()} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon ipp-icon--line"><use xlink:href="#ippIconActual"></use></svg>
-            </button>
-            <button type="button" class="ipp-btn" class:ipp-btn--active={rotate !== 0} aria-label={t("rotateLeft", "向左旋转", "rotateCcw")} on:click|stopPropagation={() => rotateBy(-90)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon ipp-icon--line"><use xlink:href="#iconUndo"></use></svg>
-            </button>
-            <button type="button" class="ipp-btn" class:ipp-btn--active={rotate !== 0} aria-label={t("rotateRight", "向右旋转", "rotateCw")} on:click|stopPropagation={() => rotateBy(90)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon ipp-icon--line"><use xlink:href="#iconRedo"></use></svg>
-            </button>
-            <button type="button" class="ipp-btn" class:ipp-btn--active={flipH} aria-label={t("flipHorizontal", "水平翻转", "imageFlipHorizontal")} on:click|stopPropagation={() => flip("h")} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon ipp-icon--line"><use xlink:href="#iconSplitLR"></use></svg>
-            </button>
-            <button type="button" class="ipp-btn" class:ipp-btn--active={flipV} aria-label={t("flipVertical", "垂直翻转", "imageFlipVertical")} on:click|stopPropagation={() => flip("v")} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon ipp-icon--line"><use xlink:href="#iconSplitTB"></use></svg>
-            </button>
-            <button type="button" class="ipp-btn" aria-label={t("fitWindow", "适应窗口", "reset")} on:click|stopPropagation={fitToViewport} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                <svg class="ipp-icon ipp-icon--line"><use xlink:href="#iconRefresh"></use></svg>
-            </button>
-            {#if showCopyFile}
-                <button type="button" class="ipp-btn" aria-label={window.siyuan.languages.copyFile || t("copyFile", "复制文件")} on:click|stopPropagation={() => copyAssetFile(currentSrc)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                    <svg class="ipp-icon ipp-icon--line"><use xlink:href="#iconFile"></use></svg>
-                </button>
-            {:else if showCopyPNG}
-                <button type="button" class="ipp-btn" aria-label={window.siyuan.languages.copyAsPNG || t("copyAsPNG", "复制为 PNG")} on:click|stopPropagation={() => copyPNGByLink(currentSrc)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                    <svg class="ipp-icon ipp-icon--line"><use xlink:href="#iconImage"></use></svg>
-                </button>
-            {:else if showExport}
-                <button type="button" class="ipp-btn" aria-label={window.siyuan.languages.export} on:click|stopPropagation={() => exportAsset(currentSrc)} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-                    <svg class="ipp-icon ipp-icon--line"><use xlink:href="#iconUpload"></use></svg>
-                </button>
-            {/if}
-            <button
-                type="button"
-                class="ipp-btn"
-                class:ipp-btn--active={!showImageNav}
-                aria-label={showImageNav ? t("hideImageIcons", "隐藏图片内图标") : t("showImageIcons", "显示图片内图标")}
-                on:click|stopPropagation={toggleImageNav}
-                on:pointerdown|stopPropagation
-                on:dblclick|stopPropagation
-            >
-                <svg class="ipp-icon ipp-icon--line"><use xlink:href={showImageNav ? "#iconEyeoff" : "#iconEye"}></use></svg>
-            </button>
-            <button
-                type="button"
-                class="ipp-btn"
-                class:ipp-btn--active={toolsPinned}
-                aria-label={toolsPinned ? t("unpinToolbar", "取消钉住工具栏") : t("pinToolbar", "钉住工具栏")}
-                on:click|stopPropagation={toggleToolsPin}
-                on:pointerdown|stopPropagation
-                on:dblclick|stopPropagation
-            >
-                <svg class="ipp-icon ipp-icon--line"><use xlink:href={toolsPinned ? "#iconUnpin" : "#iconPin"}></use></svg>
-            </button>
+                {#each shownTools as action (action.id)}
+                    <button
+                        type="button"
+                        class="ipp-btn"
+                        class:ipp-btn--active={action.active}
+                        aria-label={action.label}
+                        on:click|stopPropagation={action.run}
+                        on:pointerdown|stopPropagation
+                        on:dblclick|stopPropagation
+                    >
+                        <svg class="ipp-icon ipp-icon--line"><use xlink:href={action.icon}></use></svg>
+                    </button>
+                {/each}
+                {#if toolsOverflow}
+                    <button
+                        type="button"
+                        class="ipp-btn"
+                        aria-label={t("moreTools", "更多操作")}
+                        on:click|stopPropagation={openToolsOverflow}
+                        on:pointerdown|stopPropagation
+                        on:dblclick|stopPropagation
+                    >
+                        <svg class="ipp-icon"><use xlink:href="#iconMore"></use></svg>
+                    </button>
+                {/if}
             </div>
         </div>
     {/if}
@@ -1309,6 +1410,7 @@
     }
 
     .ipp-foot {
+        container-type: inline-size;
         box-sizing: border-box;
         display: flex;
         flex-direction: column;
@@ -1351,6 +1453,48 @@
         justify-self: end;
         opacity: 0.86;
         white-space: nowrap;
+    }
+
+    @container (max-width: 240px) {
+        .ipp-info__dim {
+            display: none;
+        }
+    }
+
+    @container (max-width: 180px) {
+        .ipp-info {
+            grid-template-columns: 1fr;
+            padding: 0 4px;
+            overflow: hidden;
+        }
+
+        .ipp-info__names,
+        .ipp-info__dim {
+            display: none;
+        }
+
+        .ipp-info__index {
+            grid-column: 1;
+            justify-self: center;
+            max-width: 100%;
+            padding: 0;
+            opacity: 1;
+        }
+
+        .ipp-info__index::before,
+        .ipp-info__index::after {
+            content: "···";
+            margin: 0 4px;
+            opacity: 0.55;
+        }
+    }
+
+    @container (max-width: 84px) {
+        .ipp-info__index::before,
+        .ipp-info__index::after {
+            content: none;
+            margin: 0;
+        }
     }
 
     .ipp-tools {
@@ -1536,8 +1680,12 @@
         z-index: 3;
     }
 
-    .ipp-stage:has(.ipp-nav:hover) .ipp-nav,
-    .ipp-stage:has(.ipp-nav:focus-visible) .ipp-nav {
+    .ipp-float--mobile .ipp-nav {
+        opacity: 1;
+    }
+
+    .ipp-float:has(.ipp-nav:hover) .ipp-nav,
+    .ipp-float:has(.ipp-nav:focus-visible) .ipp-nav {
         opacity: 1;
         background: rgba(255, 255, 255, 0.82);
     }
