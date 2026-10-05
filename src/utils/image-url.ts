@@ -134,25 +134,155 @@ export function ensureCurrentInList(list: string[], current: string): { images: 
     return { images, index };
 }
 
-/** 同源 assets 路径。加密笔记本资源返回空，调用方不提供重命名和 OCR。 */
-export function getPreviewAssetPath(src: string): string | undefined {
+interface SameOriginAsset {
+    path: string;
+    box: string | null;
+}
+
+function readSameOriginAsset(src: string): SameOriginAsset | undefined {
     if (!src) {
         return;
     }
     try {
         const url = new URL(src, `${window.location.origin}/`);
         const path = decodeURIComponent(url.pathname);
-        const box = url.searchParams.get("box");
         if (url.origin !== window.location.origin || !["http:", "https:"].includes(url.protocol)
             || !path.startsWith("/assets/") || path.includes("\\") || path.split("/").includes("..")) {
             return;
         }
-        if (box && window.siyuan?.notebooks?.some((item) => item.id === box && item.encrypted)) {
-            return;
-        }
-        return path.substring(1) + (box ? `?box=${encodeURIComponent(box)}` : "");
+        return {
+            path: path.substring(1),
+            box: url.searchParams.get("box"),
+        };
     } catch {
         return;
+    }
+}
+
+function formatAssetPath(asset: SameOriginAsset): string {
+    return asset.path + (asset.box ? `?box=${encodeURIComponent(asset.box)}` : "");
+}
+
+/** 同源 assets 路径。加密笔记本资源返回空，调用方不提供重命名和 OCR。 */
+export function getPreviewAssetPath(src: string): string | undefined {
+    const asset = readSameOriginAsset(src);
+    if (!asset) {
+        return;
+    }
+    if (asset.box && window.siyuan?.notebooks?.some((item) => item.id === asset.box && item.encrypted)) {
+        return;
+    }
+    return formatAssetPath(asset);
+}
+
+function escapeMarkdownAlt(name: string): string {
+    return name.replace(/\\/g, "\\\\").replace(/\]/g, "\\]").replace(/[\r\n]+/g, " ");
+}
+
+function markdownDestination(target: string): string {
+    if (/[\s()]/.test(target)) {
+        return `<${target.replace(/[<>]/g, "")}>`;
+    }
+    return target;
+}
+
+function readMarkdownAsset(src: string): SameOriginAsset | undefined {
+    const sameOrigin = readSameOriginAsset(src);
+    if (sameOrigin) {
+        return sameOrigin;
+    }
+    try {
+        const url = new URL(src, `${window.location.origin}/`);
+        const path = decodeURIComponent(url.pathname);
+        if (!["http:", "https:"].includes(url.protocol) || !isLocalAccessHost(url.hostname)
+            || !path.startsWith("/assets/") || path.includes("\\") || path.split("/").includes("..")) {
+            return;
+        }
+        return {
+            path: path.substring(1),
+            box: url.searchParams.get("box"),
+        };
+    } catch {
+        return;
+    }
+}
+
+/** 思源笔记里可直接粘贴的图片写法。同源资源用 `assets/` 路径，外链用原地址。 */
+export function getSiYuanImageMarkdown(src: string, name = ""): string {
+    const asset = readMarkdownAsset(src);
+    const target = asset ? formatAssetPath(asset) : (getReachableImageURL(src) || src);
+    return `![${escapeMarkdownAlt(name)}](${markdownDestination(target)})`;
+}
+
+function unwrapHost(hostname: string): string {
+    return hostname.replace(/^\[|\]$/g, "").toLowerCase();
+}
+
+function isLoopbackHost(hostname: string): boolean {
+    const host = unwrapHost(hostname);
+    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "0.0.0.0";
+}
+
+function isPrivateLanHost(hostname: string): boolean {
+    const host = unwrapHost(hostname);
+    const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+    if (!match) {
+        return false;
+    }
+    const parts = match.slice(1).map((part) => Number(part));
+    if (parts.some((part) => part > 255)) {
+        return false;
+    }
+    const [a, b] = parts;
+    return a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254);
+}
+
+function isLocalAccessHost(hostname: string): boolean {
+    return isLoopbackHost(hostname) || isPrivateLanHost(hostname);
+}
+
+function firstLanAddress(): string | undefined {
+    const localIPs = (window.siyuan?.config?.system as { localIPs?: string[] } | undefined)?.localIPs;
+    if (!Array.isArray(localIPs)) {
+        return;
+    }
+    for (const item of localIPs) {
+        const ip = String(item || "").trim().replace(/:\d+$/, "");
+        if (ip && isPrivateLanHost(ip)) {
+            return ip;
+        }
+    }
+    return;
+}
+
+function hostWithPort(hostname: string, port: string): string {
+    const host = unwrapHost(hostname);
+    const formatted = host.includes(":") ? `[${host}]` : host;
+    return port ? `${formatted}:${port}` : formatted;
+}
+
+/** 同源资源的绝对地址。回环或局域网主机换成当前还能打开的地址。外链保持原样。 */
+export function getReachableImageURL(src: string): string {
+    if (!src) {
+        return "";
+    }
+    try {
+        const url = new URL(src, window.location.href);
+        const assetPath = decodeURIComponent(url.pathname);
+        const isAsset = assetPath.startsWith("/assets/") && !assetPath.split("/").includes("..");
+        const sameOrigin = url.origin === window.location.origin;
+        if (!isLocalAccessHost(url.hostname) || (!sameOrigin && !isAsset)) {
+            return url.href;
+        }
+        const nextHost = isLoopbackHost(window.location.hostname)
+            ? hostWithPort(firstLanAddress() || window.location.hostname, url.port || window.location.port)
+            : window.location.host;
+        if (nextHost && nextHost !== url.host) {
+            url.host = nextHost;
+        }
+        return url.href;
+    } catch {
+        return src;
     }
 }
 

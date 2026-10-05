@@ -25,6 +25,8 @@
         getVisualSize,
         imageFlipCss,
         keepCenter,
+        sampleNavSurface,
+        type NavSurfaces,
         pickPinchFocalPoints,
         pinchZoomKeepFocal,
         PREVIEW_CHROME_FOOT,
@@ -36,7 +38,7 @@
     } from "@/service/image/ImagePreviewerService";
     import { SettingService } from "@/service/setting/SettingService";
     import { EnvConfig } from "@/config/EnvConfig";
-    import { getDisplayImageName, getPreviewAssetPath, replaceAssetInSrc } from "@/utils/image-url";
+    import { getDisplayImageName, getPreviewAssetPath, getReachableImageURL, getSiYuanImageMarkdown, replaceAssetInSrc } from "@/utils/image-url";
 
     export let images: string[] = [];
     export let imageTitles: string[] = [];
@@ -94,6 +96,7 @@
     let pinchTouchIds: [number, number] | null = null;
     let pinchFocalIds: number[] = [];
     const imageTouchIds = new Set<number>();
+    let touchOnControl = false;
     let longPressTimeout: ReturnType<typeof setTimeout>;
 
     let floatEl: HTMLElement;
@@ -110,7 +113,7 @@
     $: fileLabel = clipLabel(fileName);
     $: titleLabel = clipLabel(distinctTitle);
     $: showCopyFile = !!getCopyFilePath(currentSrc || images[currentIndex] || "");
-    $: showCopyPNG = !showCopyFile && canCopyImageToClipboard();
+    $: showCopyPNG = !isMobile && !showCopyFile && canCopyImageToClipboard();
     $: showZoomButtons = !["desktop", "desktop-window"].includes(getFrontend());
     $: toolsExpanded = showOptionButton && (isMobile || !collapseToolbar || toolsOpen || toolsPinned);
     $: frame = getPreviewFrame(visual.width, visual.height, {
@@ -118,11 +121,28 @@
         foot: showOptionButton ? (toolsExpanded ? PREVIEW_CHROME_FOOT : PREVIEW_CHROME_INFO) : 0,
         minWidth: 0,
     });
-    $: showOverlayNav = showOptionButton && showImageNav && images.length > 1 && visual.width >= NAV_MIN_WIDTH && visual.height >= NAV_MIN_HEIGHT;
-    $: showOverlayClose = showOptionButton && (isMobile || showImageNav);
-    $: toolActions = collectToolActions(showZoomButtons, showCopyFile, showCopyPNG, rotate, flipH, flipV, showImageNav, toolsPinned);
+    $: showOverlayNav = showOptionButton && showImageNav && images.length > 1 && (isMobile || (visual.width >= NAV_MIN_WIDTH && visual.height >= NAV_MIN_HEIGHT));
+    $: showOverlayClose = showOptionButton && showImageNav;
+    $: toolActions = collectToolActions(showZoomButtons, showCopyFile, showCopyPNG, rotate, flipH, flipV, toolsPinned, showImageNav);
     $: shownTools = visibleToolActions(toolActions, visual.width);
     $: toolsOverflow = shownTools.length < toolActions.length;
+
+    let previewImage: HTMLImageElement | undefined;
+    let navSurface: NavSurfaces = { prev: "light", next: "light", close: "light" };
+
+    function refreshNavSurface() {
+        const image = previewImage;
+        if (!image?.complete || !image.naturalWidth || visual.width < 1 || visual.height < 1) {
+            return;
+        }
+        const next = sampleNavSurface(image, rotate, flipH, flipV, visual.width, visual.height);
+        if (!next || (next.prev === navSurface.prev && next.next === navSurface.next && next.close === navSurface.close)) {
+            return;
+        }
+        navSurface = next;
+    }
+
+    $: previewImage, rotate, flipH, flipV, visual.width, visual.height, refreshNavSurface();
 
     let copiedTipKey = "";
     let copiedTimer: ReturnType<typeof setTimeout> | undefined;
@@ -288,8 +308,8 @@
         rotation: number,
         flippedH: boolean,
         flippedV: boolean,
-        imageNav: boolean,
         pinned: boolean,
+        imageNav: boolean,
     ): PreviewToolAction[] {
         const actions: PreviewToolAction[] = [{
             id: "fit",
@@ -332,14 +352,32 @@
                     active: false,
                     run: () => copyPNGByLink(currentSrc),
                 }
-                : {
-                    id: "export",
-                    label: window.siyuan.languages.export,
-                    icon: "#iconUpload",
-                    active: false,
-                    run: () => exportAsset(currentSrc),
-                };
+                : isMobile
+                    ? {
+                        id: "copyForSiYuan",
+                        label: t("copyForSiYuan", "复制", "copy"),
+                        icon: "#iconCopy",
+                        active: false,
+                        run: copyForSiYuan,
+                    }
+                    : {
+                        id: "export",
+                        label: window.siyuan.languages.export,
+                        icon: "#iconUpload",
+                        active: false,
+                        run: () => exportAsset(currentSrc),
+                    };
+        if (!isMobile) {
+            actions.push({
+                id: "actual",
+                label: t("actualSize", "实际大小", "pageScaleActual"),
+                icon: "#ippIconActual",
+                active: false,
+                run: () => setActualSize(),
+            });
+        }
         actions.push(
+            copyAction,
             {
                 id: "rotateRight",
                 label: t("rotateRight", "向右旋转", "rotateCw"),
@@ -347,14 +385,6 @@
                 active: rotation !== 0,
                 run: () => rotateBy(90),
             },
-            {
-                id: "actual",
-                label: t("actualSize", "实际大小", "pageScaleActual"),
-                icon: "#ippIconActual",
-                active: false,
-                run: () => setActualSize(),
-            },
-            copyAction,
             {
                 id: "rotateLeft",
                 label: t("rotateLeft", "向左旋转", "rotateCcw"),
@@ -376,22 +406,24 @@
                 active: flippedV,
                 run: () => flip("v"),
             },
-            {
-                id: "imageNav",
-                label: imageNav ? t("hideImageIcons", "隐藏图片内图标") : t("showImageIcons", "显示图片内图标"),
-                icon: imageNav ? "#iconEyeoff" : "#iconEye",
-                active: !imageNav,
-                run: toggleImageNav,
-            },
         );
         if (!isMobile) {
-            actions.push({
-                id: "pin",
-                label: pinned ? t("unpinToolbar", "取消钉住工具栏") : t("pinToolbar", "钉住工具栏"),
-                icon: pinned ? "#iconUnpin" : "#iconPin",
-                active: pinned,
-                run: toggleToolsPin,
-            });
+            actions.push(
+                {
+                    id: "imageNav",
+                    label: imageNavLabel(imageNav),
+                    icon: imageNav ? "#iconEye" : "#iconEyeoff",
+                    active: !imageNav,
+                    run: toggleImageNav,
+                },
+                {
+                    id: "pin",
+                    label: pinned ? t("unpinToolbar", "取消钉住工具栏") : t("pinToolbar", "钉住工具栏"),
+                    icon: pinned ? "#iconUnpin" : "#iconPin",
+                    active: pinned,
+                    run: toggleToolsPin,
+                },
+            );
         }
         return actions;
     }
@@ -725,6 +757,12 @@
             for (let i = 0; i < event.changedTouches.length; i++) {
                 imageTouchIds.add(event.changedTouches[i].identifier);
             }
+            clearOutsideSelection();
+            touchOnControl = isFloatControl(event.target);
+            if (!touchOnControl) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
             window.siyuan?.menus?.menu?.remove();
             if (event.touches.length === 1) {
                 const pos = getEventPosition(event);
@@ -747,7 +785,11 @@
     }
 
     function handleWindowTouchMove(event: TouchEvent) {
-        if (ownsTouchGesture()) {
+        if (ownsTouchGesture() && !touchOnControl) {
+            clearTimeout(longPressTimeout);
+            event.preventDefault();
+            event.stopPropagation();
+        } else if (ownsTouchGesture()) {
             clearTimeout(longPressTimeout);
         }
         if (event.touches.length >= 2 && ownsTouchGesture()) {
@@ -799,6 +841,7 @@
         }
         if (event.touches.length === 0) {
             imageTouchIds.clear();
+            touchOnControl = false;
             isDragging = false;
             dragPointerId = null;
         }
@@ -839,14 +882,51 @@
         return !!node && !!floatEl?.contains(node);
     }
 
+    function isFloatControl(target: EventTarget | null): boolean {
+        return target instanceof Element && !!target.closest("button, a, input, textarea");
+    }
+
+    function clearOutsideSelection() {
+        const selection = window.getSelection();
+        if (!selection || selection.isCollapsed) {
+            return;
+        }
+        const node = selection.anchorNode;
+        if (node && floatEl?.contains(node)) {
+            return;
+        }
+        selection.removeAllRanges();
+    }
+
+    function currentPreviewSrc(): string {
+        return currentSrc || images[currentIndex] || "";
+    }
+
+    function copyText(text: string) {
+        copyPlainText(text).then((ok) => ok ? notifyCopySuccess() : notifyCopyFailed("text"));
+    }
+
+    function copyForSiYuan() {
+        const src = currentPreviewSrc();
+        copyText(getSiYuanImageMarkdown(src, getDisplayImageName(src)));
+    }
+
+    function copyFullLink() {
+        copyText(getReachableImageURL(currentPreviewSrc()));
+    }
+
     function copyCurrentFile() {
-        const src = currentSrc || images[currentIndex] || "";
+        const src = currentPreviewSrc();
         if (showCopyFile) {
             copyAssetFile(src);
             return;
         }
         if (showCopyPNG) {
             copyPNGByLink(src);
+            return;
+        }
+        if (isMobile) {
+            copyForSiYuan();
             return;
         }
         notifyCopyFailed("file");
@@ -926,6 +1006,10 @@
         if (mod && event.shiftKey && key === "c") {
             event.preventDefault();
             event.stopImmediatePropagation();
+            if (isMobile) {
+                copyForSiYuan();
+                return;
+            }
             if (!showCopyPNG) {
                 notifyCopyFailed("permission");
                 return;
@@ -970,62 +1054,83 @@
         applyPosition({ x, y });
     }
 
+    function appendSeparator(menu: { append: (element: HTMLElement) => void }) {
+        menu.append(new MenuItem({ type: "separator" }).element);
+    }
+
     function openContextMenu(pos: Vector2) {
         window.siyuan.menus.menu.remove();
         const menu = window.siyuan.menus.menu;
+        const src = currentPreviewSrc();
+        const frontend = getFrontend();
         menu.append(new MenuItem({ icon: "ippIconPrev", label: t("prevImage", "上一张", "previous"), click: handlePrev }).element);
         menu.append(new MenuItem({ icon: "ippIconNext", label: t("nextImage", "下一张", "next"), click: handleNext }).element);
         menu.append(new MenuItem({ icon: "iconClose", label: t("closeImage", "关闭图片", "close"), click: handleCloseClick }).element);
-        menu.append(new MenuItem({ type: "separator" }).element);
-        menu.append(new MenuItem({ icon: "ippIconRotateRight", label: t("rotateRight", "向右旋转", "rotateCw"), click: () => rotateBy(90) }).element);
-        menu.append(new MenuItem({ icon: "ippIconRotateLeft", label: t("rotateLeft", "向左旋转", "rotateCcw"), click: () => rotateBy(-90) }).element);
-        menu.append(new MenuItem({ icon: "ippIconFlipH", label: t("flipHorizontal", "水平翻转", "imageFlipHorizontal"), click: () => flip("h") }).element);
-        menu.append(new MenuItem({ icon: "ippIconFlipV", label: t("flipVertical", "垂直翻转", "imageFlipVertical"), click: () => flip("v") }).element);
-        menu.append(new MenuItem({ icon: "ippIconActual", label: t("actualSize", "实际大小", "pageScaleActual"), click: () => setActualSize() }).element);
-        menu.append(new MenuItem({ icon: "iconRefresh", label: t("fitWindow", "适应窗口", "reset"), click: fitToViewport }).element);
-        menu.append(new MenuItem({ type: "separator" }).element);
+        appendSeparator(menu);
+        if (isLocalPath(src) && (frontend === "desktop" || frontend === "desktop-window")) {
+            menu.append(new MenuItem({
+                icon: "iconFolder",
+                label: t("openFileLocation", "打开文件位置"),
+                click: () => openBy(src, "folder"),
+            }).element);
+            menu.append(new MenuItem({
+                icon: "iconOpen",
+                label: window.siyuan.languages.useDefault,
+                click: () => openBy(src, "app"),
+            }).element);
+        }
+        if ((frontend === "mobile" || frontend === "browser-mobile") && src) {
+            const useSystemApp = isInAndroid() || isInHarmony();
+            menu.append(new MenuItem({
+                id: useSystemApp ? "useDefault" : "useBrowserView",
+                icon: "iconOpen",
+                label: useSystemApp ? window.siyuan.languages.useDefault : window.siyuan.languages.useBrowserView,
+                click: () => openByMobile(src),
+            }).element);
+        }
         menu.append(new MenuItem({
-            icon: "iconAlignSettings",
-            label: t("alignImage", "图片对齐"),
-            type: "submenu",
-            submenu: [
-                { icon: "iconAlignCenter", label: t("alignCenter", "居中"), click: () => alignFloat("center") },
-                { icon: "iconAlignTop", label: t("alignTop", "顶部对齐"), click: () => alignFloat("top") },
-                { icon: "iconAlignBottom", label: t("alignBottom", "底部对齐"), click: () => alignFloat("bottom") },
-                { icon: "iconAlignLeft", label: t("alignLeft", "左边对齐"), click: () => alignFloat("left") },
-                { icon: "iconAlignRight", label: t("alignRight", "右边对齐"), click: () => alignFloat("right") },
-                { icon: "iconRefresh", label: t("initSizeAndPosition", "初始化大小和位置"), click: initSizeAndPosition },
-            ],
+            label: window.siyuan.languages.export,
+            icon: "iconUpload",
+            click: () => exportAsset(src),
         }).element);
-        menu.append(new MenuItem({ type: "separator" }).element);
+        appendSeparator(menu);
         menu.append(new MenuItem({
             icon: "iconCopy",
-            label: t("copyMarkdown", "复制"),
-            click: () => copyPlainText(`![](${currentSrc})`).then((ok) => ok ? notifyCopySuccess() : notifyCopyFailed("text")),
+            label: t("copyForSiYuan", "复制", "copy"),
+            click: copyForSiYuan,
         }).element);
         menu.append(new MenuItem({
             icon: "iconLink",
-            label: `${window.siyuan.languages.copy} ${window.siyuan.languages.imageURL}`,
-            click: () => copyPlainText(currentSrc).then((ok) => ok ? notifyCopySuccess() : notifyCopyFailed("text")),
+            label: t("copyFullLink", "复制完整链接"),
+            click: copyFullLink,
         }).element);
         if (showCopyPNG) {
             menu.append(new MenuItem({
                 icon: "iconImage",
                 label: window.siyuan.languages.copyAsPNG,
-                click: () => copyPNGByLink(currentSrc),
+                click: () => copyPNGByLink(src),
             }).element);
         }
         if (showCopyFile) {
             menu.append(new MenuItem({
                 icon: "iconFile",
                 label: window.siyuan.languages.copyFile || t("copyFile", "复制文件"),
-                click: () => copyAssetFile(currentSrc),
+                click: () => copyAssetFile(src),
             }).element);
         }
-        const assetPath = getPreviewAssetPath(currentSrc || images[currentIndex] || "");
+        appendSeparator(menu);
+        menu.append(new MenuItem({ icon: "iconAdd", label: t("zoomIn", "放大", "zoomIn"), click: () => setScale(displayScale * 1.2) }).element);
+        menu.append(new MenuItem({ icon: "iconLine", label: t("zoomOut", "缩小", "zoomOut"), click: () => setScale(displayScale / 1.2) }).element);
+        menu.append(new MenuItem({ icon: "ippIconRotateRight", label: t("rotateRight", "向右旋转", "rotateCw"), click: () => rotateBy(90) }).element);
+        menu.append(new MenuItem({ icon: "ippIconRotateLeft", label: t("rotateLeft", "向左旋转", "rotateCcw"), click: () => rotateBy(-90) }).element);
+        menu.append(new MenuItem({ icon: "ippIconFlipH", label: t("flipHorizontal", "水平翻转", "imageFlipHorizontal"), click: () => flip("h") }).element);
+        menu.append(new MenuItem({ icon: "ippIconFlipV", label: t("flipVertical", "垂直翻转", "imageFlipVertical"), click: () => flip("v") }).element);
+        menu.append(new MenuItem({ icon: "ippIconActual", label: t("actualSize", "实际大小", "pageScaleActual"), click: () => setActualSize() }).element);
+        menu.append(new MenuItem({ icon: "iconRefresh", label: t("fitWindow", "适应窗口", "reset"), click: fitToViewport }).element);
+        appendSeparator(menu);
+        const assetPath = getPreviewAssetPath(src);
         const ocrState = { skip: false, original: "" };
         if (assetPath) {
-            menu.append(new MenuItem({ type: "separator" }).element);
             menu.append(new MenuItem({
                 id: "rename",
                 icon: "iconEdit",
@@ -1063,51 +1168,26 @@
                     },
                 }],
             }).element);
-        }
-        menu.append(new MenuItem({ type: "separator" }).element);
-
-        const frontend = getFrontend();
-        if (isLocalPath(currentSrc) && (frontend === "desktop" || frontend === "desktop-window")) {
-            menu.append(new MenuItem({
-                icon: "iconFolder",
-                label: t("openFileLocation", "打开文件位置"),
-                click: () => openBy(currentSrc, "folder"),
-            }).element);
-            menu.append(new MenuItem({
-                icon: "iconOpen",
-                label: window.siyuan.languages.useDefault,
-                click: () => openBy(currentSrc, "app"),
-            }).element);
-        }
-        if ((frontend === "mobile" || frontend === "browser-mobile") && currentSrc) {
-            const useSystemApp = isInAndroid() || isInHarmony();
-            menu.append(new MenuItem({
-                id: useSystemApp ? "useDefault" : "useBrowserView",
-                icon: "iconOpen",
-                label: useSystemApp ? window.siyuan.languages.useDefault : window.siyuan.languages.useBrowserView,
-                click: () => openByMobile(currentSrc),
-            }).element);
+            appendSeparator(menu);
         }
         menu.append(new MenuItem({
-            label: window.siyuan.languages.export,
-            icon: "iconUpload",
-            click: () => exportAsset(currentSrc),
+            icon: showImageNav ? "iconEye" : "iconEyeoff",
+            label: imageNavLabel(showImageNav),
+            click: toggleImageNav,
         }).element);
-        menu.append(new MenuItem({ type: "separator" }).element);
+        appendSeparator(menu);
         menu.append(new MenuItem({
-            icon: "iconEyeoff",
-            label: t("toggleButtons", "显示/隐藏按钮"),
-            click: () => {
-                const stage = stageRect();
-                showOptionButton = !showOptionButton;
-                const nextFrame = frameFor(visual.width, visual.height);
-                position = clampFloatPosition(
-                    stage.left - nextFrame.offsetX,
-                    stage.top - nextFrame.offsetY,
-                    nextFrame.width,
-                    nextFrame.height,
-                );
-            },
+            icon: "iconAlignSettings",
+            label: t("alignImage", "图片对齐"),
+            type: "submenu",
+            submenu: [
+                { icon: "iconAlignCenter", label: t("alignCenter", "居中"), click: () => alignFloat("center") },
+                { icon: "iconAlignTop", label: t("alignTop", "顶部对齐"), click: () => alignFloat("top") },
+                { icon: "iconAlignBottom", label: t("alignBottom", "底部对齐"), click: () => alignFloat("bottom") },
+                { icon: "iconAlignLeft", label: t("alignLeft", "左边对齐"), click: () => alignFloat("left") },
+                { icon: "iconAlignRight", label: t("alignRight", "右边对齐"), click: () => alignFloat("right") },
+                { icon: "iconRefresh", label: t("initSizeAndPosition", "初始化大小和位置"), click: initSizeAndPosition },
+            ],
         }).element);
 
         menu.popup({ x: pos.x, y: pos.y });
@@ -1213,6 +1293,10 @@
         return t("clickToCopy", "点击复制");
     }
 
+    function imageNavLabel(visible: boolean): string {
+        return visible ? t("hideImageIcons", "隐藏图片内按钮") : t("showImageIcons", "显示图片内按钮");
+    }
+
     function toggleImageNav() {
         showImageNav = !showImageNav;
         SettingService.ins.updateSettingCofnigValue("showImageNav", showImageNav);
@@ -1231,7 +1315,7 @@
     class:ipp-float--flash={flashing}
     class:ipp-float--chrome={showOptionButton}
     tabindex="0"
-    style="left:{position.x}px;top:{position.y}px;width:{frame.width}px;height:{frame.height}px;--ipp-info:{PREVIEW_CHROME_INFO}px;--ipp-tools:{PREVIEW_CHROME_TOOLS}px"
+    style="left:{position.x}px;top:{position.y}px;width:{frame.width}px;height:{frame.height}px;--ipp-info:{PREVIEW_CHROME_INFO}px;--ipp-tools:{PREVIEW_CHROME_TOOLS}px;--ipp-stage-h:{visual.height}px"
     on:pointerdown={handlePointerDown}
     on:contextmenu|stopPropagation={handleContextmenu}
     on:touchstart={handleTouchStart}
@@ -1239,30 +1323,41 @@
     on:touchend|stopPropagation={handleTouchEnd}
 >
     {#if showOverlayClose}
-        <button type="button" class="ipp-btn ipp-nav ipp-nav--close" aria-label={t("closeImage", "关闭图片", "close")} on:click|stopPropagation={handleCloseClick} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+        <button type="button" class="ipp-btn ipp-nav ipp-nav--close" class:ipp-nav--on-light={navSurface.close === "light"} class:ipp-nav--on-dark={navSurface.close === "dark"} aria-label={t("closeImage", "关闭图片", "close")} on:click|stopPropagation={handleCloseClick} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
             <svg class="ipp-icon"><use xlink:href="#ippIconClose"></use></svg>
+        </button>
+    {/if}
+    {#if showOverlayNav && isMobile}
+        <button type="button" class="ipp-btn ipp-nav ipp-nav--prev" class:ipp-nav--on-light={navSurface.prev === "light"} class:ipp-nav--on-dark={navSurface.prev === "dark"} title={t("prevImage", "上一张", "previous")} on:click|stopPropagation={handlePrev} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+            <svg class="ipp-icon"><use xlink:href="#ippIconPrev"></use></svg>
+        </button>
+        <button type="button" class="ipp-btn ipp-nav ipp-nav--next" class:ipp-nav--on-light={navSurface.next === "light"} class:ipp-nav--on-dark={navSurface.next === "dark"} title={t("nextImage", "下一张", "next")} on:click|stopPropagation={handleNext} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+            <svg class="ipp-icon"><use xlink:href="#ippIconNext"></use></svg>
         </button>
     {/if}
     <div class="ipp-body">
         <div class="ipp-stage" style="width:{visual.width}px;height:{visual.height}px">
             {#if currentSrc}
                 <img
+                    bind:this={previewImage}
                     class="ipp-image"
                     class:ipp-image--loading={loading}
                     src={currentSrc}
                     alt={fileName || "image"}
                     draggable="false"
                     style="width:{contentW}px;height:{contentH}px;transform:{imageCss};"
+                    on:load={refreshNavSurface}
                 />
             {/if}
             {#if loadError}
                 <div class="ipp-status">{t("imageLoadFailed", "图片加载失败")}</div>
             {/if}
-            {#if showOverlayNav}
-                <button type="button" class="ipp-btn ipp-nav ipp-nav--prev" title={t("prevImage", "上一张", "previous")} on:click|stopPropagation={handlePrev} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+            <div class="ipp-hit"></div>
+            {#if showOverlayNav && !isMobile}
+                <button type="button" class="ipp-btn ipp-nav ipp-nav--prev" class:ipp-nav--on-light={navSurface.prev === "light"} class:ipp-nav--on-dark={navSurface.prev === "dark"} title={t("prevImage", "上一张", "previous")} on:click|stopPropagation={handlePrev} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
                     <svg class="ipp-icon"><use xlink:href="#ippIconPrev"></use></svg>
                 </button>
-                <button type="button" class="ipp-btn ipp-nav ipp-nav--next" title={t("nextImage", "下一张", "next")} on:click|stopPropagation={handleNext} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
+                <button type="button" class="ipp-btn ipp-nav ipp-nav--next" class:ipp-nav--on-light={navSurface.next === "light"} class:ipp-nav--on-dark={navSurface.next === "dark"} title={t("nextImage", "下一张", "next")} on:click|stopPropagation={handleNext} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
                     <svg class="ipp-icon"><use xlink:href="#ippIconNext"></use></svg>
                 </button>
             {/if}
@@ -1360,6 +1455,8 @@
         flex-direction: column;
         pointer-events: auto;
         user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
         visibility: hidden;
         overflow: visible;
         background: transparent;
@@ -1419,6 +1516,7 @@
         background: var(--ipp-panel-bg);
         color: #fff;
         border-radius: 0 0 8px 8px;
+        touch-action: none;
     }
 
     .ipp-info {
@@ -1527,6 +1625,7 @@
         flex: none;
         border-radius: 8px 8px 0 0;
         overflow: hidden;
+        touch-action: none;
     }
 
     .ipp-body::before,
@@ -1541,6 +1640,15 @@
         flex: none;
     }
 
+    .ipp-hit {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        background: rgba(0, 0, 0, 0.01);
+        touch-action: none;
+        -webkit-touch-callout: none;
+    }
+
     .ipp-image {
         position: absolute;
         left: 50%;
@@ -1551,6 +1659,7 @@
         pointer-events: none;
         transform-origin: center center;
         transition: opacity 0.12s ease;
+        z-index: 0;
     }
 
     .ipp-image--loading {
@@ -1567,6 +1676,7 @@
         line-height: 1.4;
         pointer-events: none;
         text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+        z-index: 2;
     }
 
     .ipp-btn {
@@ -1597,7 +1707,7 @@
         cursor: pointer;
     }
 
-    .ipp-btn:hover {
+    .ipp-btn:hover:not(.ipp-nav) {
         background: rgba(255, 255, 255, 0.18);
         color: #fff;
     }
@@ -1655,11 +1765,20 @@
 
     .ipp-nav {
         position: absolute;
-        background: rgba(255, 255, 255, 0.5);
-        color: var(--b3-theme-on-surface-light);
-        box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
-        opacity: 0.5;
+        opacity: 0.78;
         z-index: 2;
+    }
+
+    .ipp-nav--on-light {
+        background: rgba(0, 0, 0, 0.5);
+        color: #fff;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.28), 0 0 10px rgba(0, 0, 0, 0.28);
+    }
+
+    .ipp-nav--on-dark {
+        background: rgba(255, 255, 255, 0.82);
+        color: #1a1a1a;
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.16), 0 0 10px rgba(0, 0, 0, 0.28);
     }
 
     .ipp-nav--prev {
@@ -1684,10 +1803,27 @@
         opacity: 1;
     }
 
-    .ipp-float:has(.ipp-nav:hover) .ipp-nav,
-    .ipp-float:has(.ipp-nav:focus-visible) .ipp-nav {
+    .ipp-float--mobile .ipp-nav--prev,
+    .ipp-float--mobile .ipp-nav--next {
+        top: calc(var(--ipp-stage-h) * 0.5);
+        z-index: 4;
+    }
+
+    .ipp-float:not(.ipp-float--mobile):has(.ipp-nav:hover) .ipp-nav,
+    .ipp-float:not(.ipp-float--mobile):has(.ipp-nav:focus-visible) .ipp-nav {
         opacity: 1;
-        background: rgba(255, 255, 255, 0.82);
+    }
+
+    .ipp-float:not(.ipp-float--mobile):has(.ipp-nav:hover) .ipp-nav--on-light,
+    .ipp-float:not(.ipp-float--mobile):has(.ipp-nav:focus-visible) .ipp-nav--on-light {
+        background: rgba(0, 0, 0, 0.68);
+        color: #fff;
+    }
+
+    .ipp-float:not(.ipp-float--mobile):has(.ipp-nav:hover) .ipp-nav--on-dark,
+    .ipp-float:not(.ipp-float--mobile):has(.ipp-nav:focus-visible) .ipp-nav--on-dark {
+        background: rgba(255, 255, 255, 0.94);
+        color: #1a1a1a;
     }
 
     .ipp-info .ipp-copy {

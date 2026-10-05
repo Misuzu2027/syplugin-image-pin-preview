@@ -227,3 +227,117 @@ export function imageFlipCss(rotate: number, flipH: boolean, flipV: boolean): st
     const scaleY = flipV ? -1 : 1;
     return `translate(-50%, -50%) rotate(${rotate}deg) scale(${scaleX}, ${scaleY})`;
 }
+
+export type NavSurface = "light" | "dark";
+
+export interface NavSurfaces {
+    prev: NavSurface;
+    next: NavSurface;
+    close: NavSurface;
+}
+
+const NAV_SAMPLE_WIDTH = 64;
+const NAV_BUTTON_CENTER = 22;
+
+function relativeLuminance(red: number, green: number, blue: number): number {
+    const channel = (value: number) => {
+        const scaled = value / 255;
+        return scaled <= 0.04045 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+    };
+    return 0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue);
+}
+
+function themeBackdrop(): [number, number, number] {
+    if (typeof document === "undefined") {
+        return [255, 255, 255];
+    }
+    const raw = getComputedStyle(document.body).backgroundColor;
+    const match = /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/.exec(raw);
+    if (!match) {
+        return [255, 255, 255];
+    }
+    return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function surfaceAt(
+    pixels: Uint8ClampedArray,
+    width: number,
+    height: number,
+    nx: number,
+    ny: number,
+    patch: number,
+    backdrop: [number, number, number],
+): NavSurface {
+    const cx = Math.min(width - 1, Math.max(0, Math.round(nx * (width - 1))));
+    const cy = Math.min(height - 1, Math.max(0, Math.round(ny * (height - 1))));
+    const radius = Math.max(1, Math.floor(patch / 2));
+    let total = 0;
+    let count = 0;
+    for (let y = cy - radius; y <= cy + radius; y++) {
+        if (y < 0 || y >= height) {
+            continue;
+        }
+        for (let x = cx - radius; x <= cx + radius; x++) {
+            if (x < 0 || x >= width) {
+                continue;
+            }
+            const index = (y * width + x) * 4;
+            const alpha = pixels[index + 3] / 255;
+            const red = pixels[index] * alpha + backdrop[0] * (1 - alpha);
+            const green = pixels[index + 1] * alpha + backdrop[1] * (1 - alpha);
+            const blue = pixels[index + 2] * alpha + backdrop[2] * (1 - alpha);
+            total += relativeLuminance(red, green, blue);
+            count++;
+        }
+    }
+    return (count ? total / count : 1) >= 0.4 ? "light" : "dark";
+}
+
+/** 按按钮盖住的画面明暗，决定左右和关闭用深色还是浅色。 */
+export function sampleNavSurface(
+    image: HTMLImageElement,
+    rotate: number,
+    flipH: boolean,
+    flipV: boolean,
+    visualWidth: number,
+    visualHeight: number,
+): NavSurfaces | null {
+    if (!image.naturalWidth || !image.naturalHeight || visualWidth < 1 || visualHeight < 1) {
+        return null;
+    }
+    const turned = Math.abs(rotate % 180) === 90;
+    const canvas = document.createElement("canvas");
+    const longSide = NAV_SAMPLE_WIDTH;
+    const width = visualWidth >= visualHeight ? longSide : Math.max(1, Math.round(longSide * visualWidth / visualHeight));
+    const height = visualHeight > visualWidth ? longSide : Math.max(1, Math.round(longSide * visualHeight / visualWidth));
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) {
+        return null;
+    }
+    const drawWidth = turned ? height : width;
+    const drawHeight = turned ? width : height;
+    context.translate(width / 2, height / 2);
+    context.rotate((rotate * Math.PI) / 180);
+    context.scale(flipH ? -1 : 1, flipV ? -1 : 1);
+    try {
+        context.drawImage(image, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+        const pixels = context.getImageData(0, 0, width, height).data;
+        const backdrop = themeBackdrop();
+        const insetX = Math.min(0.42, NAV_BUTTON_CENTER / visualWidth);
+        const insetY = Math.min(0.42, NAV_BUTTON_CENTER / visualHeight);
+        const patch = Math.max(
+            2,
+            Math.round(32 / visualWidth * width),
+            Math.round(32 / visualHeight * height),
+        );
+        return {
+            prev: surfaceAt(pixels, width, height, insetX, 0.5, patch, backdrop),
+            next: surfaceAt(pixels, width, height, 1 - insetX, 0.5, patch, backdrop),
+            close: surfaceAt(pixels, width, height, 1 - insetX, insetY, patch, backdrop),
+        };
+    } catch {
+        return null;
+    }
+}
