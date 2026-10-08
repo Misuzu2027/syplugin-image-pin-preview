@@ -1,6 +1,6 @@
 {
   "name": "syplugin-image-pin-preview",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "type": "module",
   "description": "",
   "repository": "https://github.com/Misuzu2027/syplugin-image-pin-preview",
@@ -20,6 +20,7 @@
     "@tsconfig/svelte": "^4.0.1",
     "@types/node": "^20.3.0",
     "cross-env": "^7.0.3",
+    "exifr": "^7.1.3",
     "fast-glob": "^3.2.12",
     "glob": "^10.0.0",
     "js-yaml": "^4.1.0",

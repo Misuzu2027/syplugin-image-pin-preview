@@ -7,6 +7,9 @@
     import { getAssetName, isLocalPath } from "@/libs/siyuan/util/pathName";
     import { canCopyImageToClipboard, copyPlainText, notifyCopyFailed, notifyCopySuccess } from "@/utils/clipboard";
     import { getImageOCRText, ocrAsset, renameAsset, setImageOCRText } from "@/utils/api";
+    import { loadImageDetail, type ImageDetailRow } from "@/service/image/ImageDetailService";
+    import ImageDetailPage from "@/components/image/ImageDetailPage.svelte";
+    import ImageDetailWindow from "@/components/image/ImageDetailWindow.svelte";
     import { getFrontend } from "siyuan";
     import { onMount, onDestroy } from "svelte";
     import {
@@ -38,7 +41,7 @@
     } from "@/service/image/ImagePreviewerService";
     import { SettingService } from "@/service/setting/SettingService";
     import { EnvConfig } from "@/config/EnvConfig";
-    import { getDisplayImageName, getPreviewAssetPath, getReachableImageURL, getSiYuanImageMarkdown, replaceAssetInSrc } from "@/utils/image-url";
+    import { getDisplayImageName, getImageBasename, getPreviewAssetPath, getReachableImageURL, getSiYuanImageMarkdown, replaceAssetInSrc } from "@/utils/image-url";
 
     export let images: string[] = [];
     export let imageTitles: string[] = [];
@@ -123,7 +126,7 @@
     });
     $: showOverlayNav = showOptionButton && showImageNav && images.length > 1 && (isMobile || (visual.width >= NAV_MIN_WIDTH && visual.height >= NAV_MIN_HEIGHT));
     $: showOverlayClose = showOptionButton && showImageNav;
-    $: toolActions = collectToolActions(showZoomButtons, showCopyFile, showCopyPNG, rotate, flipH, flipV, toolsPinned, showImageNav);
+    $: toolActions = collectToolActions(showZoomButtons, showCopyFile, showCopyPNG, rotate, flipH, flipV, toolsPinned, showImageNav, isMobile ? detailPageOpen : detailOverlay);
     $: shownTools = visibleToolActions(toolActions, visual.width);
     $: toolsOverflow = shownTools.length < toolActions.length;
 
@@ -148,6 +151,25 @@
     let copiedTimer: ReturnType<typeof setTimeout> | undefined;
     let fileNameCut = false;
     let titleCut = false;
+    let detailOverlay = false;
+    let detailPageOpen = false;
+    let detailWindowOpen = false;
+    let detailWindowX = 24;
+    let detailWindowY = 24;
+    let detailWindowPlaced = false;
+    let detailRows: ImageDetailRow[] = [];
+    let detailPartial = false;
+    let detailLoading = false;
+    let detailToken = 0;
+    let detailRequestKey = "";
+
+    $: detailFileName = getImageBasename(currentSrc || images[currentIndex] || "");
+    $: detailIndexLabel = images.length ? `[${currentIndex + 1}/${images.length}]` : "";
+    $: detailWatchKey = `${detailOverlay}|${detailPageOpen}|${detailWindowOpen}|${currentIndex}|${currentSrc}|${naturalW}|${naturalH}|${loading}`;
+    $: if ((detailOverlay || detailPageOpen || detailWindowOpen) && !loading && currentSrc && detailWatchKey !== detailRequestKey) {
+        detailRequestKey = detailWatchKey;
+        void refreshDetail();
+    }
 
     onMount(() => {
         window.addEventListener("pointermove", handlePointerMove);
@@ -310,6 +332,7 @@
         flippedV: boolean,
         pinned: boolean,
         imageNav: boolean,
+        detailActive: boolean,
     ): PreviewToolAction[] {
         const actions: PreviewToolAction[] = [{
             id: "fit",
@@ -317,6 +340,18 @@
             icon: "#iconRefresh",
             active: false,
             run: fitToViewport,
+        }, {
+            id: "detail",
+            label: t("imageDetail", "图片详情"),
+            icon: "#iconInfo",
+            active: detailActive,
+            run: () => {
+                if (isMobile) {
+                    openDetailPage();
+                    return;
+                }
+                toggleDetailOverlay();
+            },
         }];
         if (zoomButtons) {
             actions.push(
@@ -705,7 +740,7 @@
             return;
         }
         const target = event.target as HTMLElement;
-        if (target.closest("button")) {
+        if (target.closest("button, .ipp-detail-overlay")) {
             return;
         }
         if (isPinching || (dragPointerId !== null && event.pointerId !== dragPointerId)) {
@@ -883,7 +918,7 @@
     }
 
     function isFloatControl(target: EventTarget | null): boolean {
-        return target instanceof Element && !!target.closest("button, a, input, textarea");
+        return target instanceof Element && !!target.closest("button, a, input, textarea, .ipp-detail-overlay");
     }
 
     function clearOutsideSelection() {
@@ -941,7 +976,21 @@
         copyCurrentFile();
     }
 
+    function isSiyuanMenuOpen(): boolean {
+        const element = window.siyuan?.menus?.menu?.element;
+        if (!element || element.classList.contains("fn__none")) {
+            return false;
+        }
+        return element.style.display !== "none";
+    }
+
     function handleKeydown(event: KeyboardEvent) {
+        if (detailPageOpen && event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            detailPageOpen = false;
+            return;
+        }
         if (!isPreviewSelected()) {
             return;
         }
@@ -950,6 +999,10 @@
         const mod = event.ctrlKey || event.metaKey;
         if (event.key === "Escape") {
             event.preventDefault();
+            if (isSiyuanMenuOpen()) {
+                window.siyuan.menus.menu.remove();
+                return;
+            }
             handleCloseClick();
             return;
         }
@@ -1101,7 +1154,7 @@
         }).element);
         menu.append(new MenuItem({
             icon: "iconLink",
-            label: t("copyFullLink", "复制完整链接"),
+            label: t("copyFullLink", "复制网页链接"),
             click: copyFullLink,
         }).element);
         if (showCopyPNG) {
@@ -1119,14 +1172,33 @@
             }).element);
         }
         appendSeparator(menu);
-        menu.append(new MenuItem({ icon: "iconAdd", label: t("zoomIn", "放大", "zoomIn"), click: () => setScale(displayScale * 1.2) }).element);
-        menu.append(new MenuItem({ icon: "iconLine", label: t("zoomOut", "缩小", "zoomOut"), click: () => setScale(displayScale / 1.2) }).element);
-        menu.append(new MenuItem({ icon: "ippIconRotateRight", label: t("rotateRight", "向右旋转", "rotateCw"), click: () => rotateBy(90) }).element);
-        menu.append(new MenuItem({ icon: "ippIconRotateLeft", label: t("rotateLeft", "向左旋转", "rotateCcw"), click: () => rotateBy(-90) }).element);
-        menu.append(new MenuItem({ icon: "ippIconFlipH", label: t("flipHorizontal", "水平翻转", "imageFlipHorizontal"), click: () => flip("h") }).element);
-        menu.append(new MenuItem({ icon: "ippIconFlipV", label: t("flipVertical", "垂直翻转", "imageFlipVertical"), click: () => flip("v") }).element);
-        menu.append(new MenuItem({ icon: "ippIconActual", label: t("actualSize", "实际大小", "pageScaleActual"), click: () => setActualSize() }).element);
-        menu.append(new MenuItem({ icon: "iconRefresh", label: t("fitWindow", "适应窗口", "reset"), click: fitToViewport }).element);
+        menu.append(new MenuItem({
+            icon: "iconInfo",
+            label: t("imageDetail", "图片详情"),
+            click: () => {
+                if (isMobile) {
+                    openDetailPage();
+                    return;
+                }
+                openDetailWindow();
+            },
+        }).element);
+        appendSeparator(menu);
+        menu.append(new MenuItem({
+            icon: "iconImage",
+            label: t("viewMenu", "视图"),
+            type: "submenu",
+            submenu: [
+                { icon: "iconAdd", label: t("zoomIn", "放大", "zoomIn"), click: () => setScale(displayScale * 1.2) },
+                { icon: "iconLine", label: t("zoomOut", "缩小", "zoomOut"), click: () => setScale(displayScale / 1.2) },
+                { icon: "ippIconRotateRight", label: t("rotateRight", "向右旋转", "rotateCw"), click: () => rotateBy(90) },
+                { icon: "ippIconRotateLeft", label: t("rotateLeft", "向左旋转", "rotateCcw"), click: () => rotateBy(-90) },
+                { icon: "ippIconFlipH", label: t("flipHorizontal", "水平翻转", "imageFlipHorizontal"), click: () => flip("h") },
+                { icon: "ippIconFlipV", label: t("flipVertical", "垂直翻转", "imageFlipVertical"), click: () => flip("v") },
+                { icon: "ippIconActual", label: t("actualSize", "实际大小", "pageScaleActual"), click: () => setActualSize() },
+                { icon: "iconRefresh", label: t("fitWindow", "适应窗口", "reset"), click: fitToViewport },
+            ],
+        }).element);
         appendSeparator(menu);
         const assetPath = getPreviewAssetPath(src);
         const ocrState = { skip: false, original: "" };
@@ -1301,6 +1373,66 @@
         showImageNav = !showImageNav;
         SettingService.ins.updateSettingCofnigValue("showImageNav", showImageNav);
     }
+
+    function placeDetailWindow() {
+        const width = 440;
+        const margin = 12;
+        let x = position.x + frame.width + margin;
+        let y = Math.max(margin, position.y);
+        if (x + width > window.innerWidth - margin) {
+            x = position.x - width - margin;
+        }
+        if (x < margin) {
+            x = Math.max(margin, window.innerWidth - width - margin);
+        }
+        const maxY = Math.max(margin, window.innerHeight - 160);
+        if (y > maxY) {
+            y = maxY;
+        }
+        return { x, y };
+    }
+
+    function toggleDetailOverlay() {
+        detailOverlay = !detailOverlay;
+    }
+
+    function openDetailPage() {
+        detailPageOpen = true;
+    }
+
+    function openDetailWindow() {
+        if (!detailWindowPlaced) {
+            const placed = placeDetailWindow();
+            detailWindowX = placed.x;
+            detailWindowY = placed.y;
+            detailWindowPlaced = true;
+        }
+        detailWindowOpen = true;
+    }
+
+    async function refreshDetail() {
+        const token = ++detailToken;
+        const source = {
+            src: currentSrc,
+            fileName: detailFileName,
+            indexLabel: detailIndexLabel,
+            width: naturalW,
+            height: naturalH,
+        };
+        detailLoading = true;
+        try {
+            const result = await loadImageDetail(source, t);
+            if (token !== detailToken) {
+                return;
+            }
+            detailRows = result.rows;
+            detailPartial = result.partial;
+        } finally {
+            if (token === detailToken) {
+                detailLoading = false;
+            }
+        }
+    }
 </script>
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -1351,6 +1483,24 @@
             {/if}
             {#if loadError}
                 <div class="ipp-status">{t("imageLoadFailed", "图片加载失败")}</div>
+            {/if}
+            {#if detailOverlay && !isMobile}
+                <div
+                    class="ipp-detail-overlay"
+                    on:pointerdown|stopPropagation
+                    on:dblclick|stopPropagation
+                    on:wheel|stopPropagation
+                >
+                    {#if detailLoading && !detailRows.length}
+                        <div>{t("detailLoading", "正在读取…")}</div>
+                    {/if}
+                    {#if detailPartial}
+                        <div>{t("detailUnavailable", "无法读取详细信息")}</div>
+                    {/if}
+                    {#each detailRows as row (row.key)}
+                        <div>{row.label}: {row.value}</div>
+                    {/each}
+                </div>
             {/if}
             <div class="ipp-hit"></div>
             {#if showOverlayNav && !isMobile}
@@ -1445,6 +1595,34 @@
         </div>
     {/if}
 </div>
+{#if detailWindowOpen && !isMobile}
+    <ImageDetailWindow
+        bind:x={detailWindowX}
+        bind:y={detailWindowY}
+        title={t("imageDetail", "图片详情")}
+        rows={detailRows}
+        loading={detailLoading}
+        partial={detailPartial}
+        loadingText={t("detailLoading", "正在读取…")}
+        partialText={t("detailUnavailable", "无法读取详细信息")}
+        copiedText={t("copiedSuccess", "复制成功")}
+        closeLabel={t("closeImage", "关闭图片", "close")}
+        onClose={() => detailWindowOpen = false}
+    />
+{/if}
+{#if detailPageOpen && isMobile}
+    <ImageDetailPage
+        title={t("imageDetail", "图片详情")}
+        rows={detailRows}
+        loading={detailLoading}
+        partial={detailPartial}
+        loadingText={t("detailLoading", "正在读取…")}
+        partialText={t("detailUnavailable", "无法读取详细信息")}
+        copiedText={t("copiedSuccess", "复制成功")}
+        backLabel={t("back", "返回")}
+        onClose={() => detailPageOpen = false}
+    />
+{/if}
 
 <style>
     .ipp-float {
@@ -1766,7 +1944,7 @@
     .ipp-nav {
         position: absolute;
         opacity: 0.78;
-        z-index: 2;
+        z-index: 4;
     }
 
     .ipp-nav--on-light {
@@ -1796,7 +1974,30 @@
     .ipp-nav--close {
         top: 6px;
         right: 6px;
-        z-index: 3;
+        z-index: 5;
+    }
+
+    .ipp-detail-overlay {
+        position: absolute;
+        left: 0;
+        top: 0;
+        z-index: 2;
+        width: max-content;
+        max-width: min(360px, 100%);
+        max-height: 100%;
+        box-sizing: border-box;
+        overflow: auto;
+        padding: 8px 10px;
+        color: #fff;
+        font-size: 13px;
+        line-height: 1.45;
+        text-align: left;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 2px rgba(0, 0, 0, 0.85);
+        pointer-events: auto;
+        user-select: text;
+        -webkit-user-select: text;
+        touch-action: pan-y;
+        overflow-wrap: anywhere;
     }
 
     .ipp-float--mobile .ipp-nav {

@@ -334,3 +334,19 @@ export function getDisplayImageName(src: string): string {
 export function getImageFileName(src: string): string {
     return getDisplayImageName(src);
 }
+
+/** 地址里的文件名，保留扩展名。 */
+export function getImageBasename(src: string): string {
+    if (!src) {
+        return "";
+    }
+    let path = src;
+    try {
+        path = decodeURIComponent(src);
+    } catch {
+        path = src;
+    }
+    const clean = path.split(/[?#]/, 1)[0];
+    const slash = Math.max(clean.lastIndexOf("/"), clean.lastIndexOf("\\"));
+    return clean.substring(slash + 1);
+}

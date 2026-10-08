@@ -38,7 +38,9 @@ export default defineConfig({
                 { src: "./README*.md", dest: "./" },
                 { src: "./plugin.json", dest: "./" },
                 { src: "./preview.png", dest: "./" },
-                { src: "./icon.png", dest: "./" }
+                { src: "./icon.png", dest: "./" },
+                { src: "./public/data/places.json", dest: "./data" },
+                { src: "./public/data/places.license.txt", dest: "./data" }
             ],
         }),
 
@@ -69,6 +71,7 @@ export default defineConfig({
                         async buildStart() {
                             const files = await fg([
                                 'public/i18n/**',
+                                'public/data/**',
                                 './README*.md',
                                 './plugin.json'
                             ]);

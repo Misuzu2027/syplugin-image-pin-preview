@@ -1,0 +1,6 @@
+China county and city centers come from public administrative coordinates (GCJ-02).
+Source: https://github.com/simonkuang/cn-pcas-geo
+
+World cities are from GeoNames cities15000, used under CC-BY 4.0.
+https://www.geonames.org/
+Mainland China cities are omitted here because the China table covers them.

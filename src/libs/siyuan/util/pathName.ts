@@ -1,6 +1,5 @@
 import { getElectronIpcRenderer, isBrowser } from "@/utils/electron-util";
 import * as path from "path";
-import { Constants } from "siyuan";
 import { isWindows } from "../protyle/util/compatibility";
 
 export const pathPosix = () => {
@@ -12,11 +11,15 @@ export const pathPosix = () => {
 };
 
 export const showFileInFolder = (filePath: string) => {
-    let ipcRenderer = getElectronIpcRenderer();
-
-    if (ipcRenderer && !isBrowser()) {
-        ipcRenderer.send(Constants.SIYUAN_OPEN_FOLDER, filePath);
+    const ipcRenderer = getElectronIpcRenderer();
+    if (!ipcRenderer || isBrowser() || !filePath) {
+        return;
     }
+    // 桌面端主进程只监听 siyuan-cmd，并按 cmd 调用 shell.showItemInFolder。
+    ipcRenderer.send("siyuan-cmd", {
+        cmd: "showItemInFolder",
+        filePath,
+    });
 };
 
 export const getAssetName = (assetPath: string) => {
