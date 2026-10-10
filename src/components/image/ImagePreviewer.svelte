@@ -51,6 +51,8 @@
 
     const DOUBLE_TAP_THRESHOLD = 300;
     const LONG_PRESS_MS = 350;
+    const LONG_PRESS_SLOP = 12;
+    const MENU_CLICK_GUARD_MS = 700;
     const MIN_WIDTH = 80;
     const NAV_MIN_WIDTH = 168;
     const NAV_MIN_HEIGHT = 96;
@@ -101,6 +103,11 @@
     const imageTouchIds = new Set<number>();
     let touchOnControl = false;
     let longPressTimeout: ReturnType<typeof setTimeout>;
+    let longPressOrigin: Vector2 | null = null;
+    let longPressMoved = false;
+    let longPressOpened = false;
+    let longPressStartedAt = 0;
+    let suppressClickUntil = 0;
 
     let floatEl: HTMLElement;
     let flashing = false;
@@ -179,6 +186,8 @@
         window.addEventListener("touchmove", handleWindowTouchMove, { capture: true, passive: false });
         window.addEventListener("touchend", handleWindowTouchEnd, { capture: true, passive: false });
         window.addEventListener("touchcancel", handleWindowTouchEnd, { capture: true, passive: false });
+        window.addEventListener("contextmenu", handleWindowContextMenu, true);
+        window.addEventListener("click", handleWindowClickCapture, true);
         floatEl?.addEventListener("wheel", handleWheel, { passive: false });
         floatEl?.addEventListener("copy", handleCopyEvent);
         window.addEventListener("keydown", handleKeydown, true);
@@ -193,6 +202,8 @@
         window.removeEventListener("touchmove", handleWindowTouchMove, true);
         window.removeEventListener("touchend", handleWindowTouchEnd, true);
         window.removeEventListener("touchcancel", handleWindowTouchEnd, true);
+        window.removeEventListener("contextmenu", handleWindowContextMenu, true);
+        window.removeEventListener("click", handleWindowClickCapture, true);
         window.removeEventListener("keydown", handleKeydown, true);
         floatEl?.removeEventListener("wheel", handleWheel);
         floatEl?.removeEventListener("copy", handleCopyEvent);
@@ -684,6 +695,7 @@
         isPinching = true;
         isDragging = false;
         dragPointerId = null;
+        longPressMoved = true;
         clearTimeout(longPressTimeout);
     }
 
@@ -773,6 +785,12 @@
             return;
         }
         const pos = pointerPos(event);
+        if (event.pointerType === "touch") {
+            markLongPressMoved(pos.x, pos.y);
+            if (longPressOrigin && !longPressMoved) {
+                return;
+            }
+        }
         applyPosition({
             x: dragOrigin.x + pos.x - dragStartPos.x,
             y: dragOrigin.y + pos.y - dragStartPos.y,
@@ -787,8 +805,84 @@
         dragPointerId = null;
     }
 
+    function previewOwnsPoint(target: EventTarget | null, x: number, y: number) {
+        if (isOnFloat(target)) {
+            return true;
+        }
+        const top = document.elementFromPoint(x, y);
+        if (isOnFloat(top)) {
+            return true;
+        }
+        if (!floatEl || top?.closest(".ipp-detail-page") || !(target instanceof Element) || !target.closest("img")) {
+            return false;
+        }
+        const rect = floatEl.getBoundingClientRect();
+        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    }
+
+    function markLongPressMoved(x: number, y: number) {
+        if (!longPressOrigin || longPressMoved) {
+            return;
+        }
+        const dx = x - longPressOrigin.x;
+        const dy = y - longPressOrigin.y;
+        if (dx * dx + dy * dy <= LONG_PRESS_SLOP * LONG_PRESS_SLOP) {
+            return;
+        }
+        longPressMoved = true;
+        clearTimeout(longPressTimeout);
+    }
+
+    function openLongPressMenu(pos: Vector2) {
+        if (longPressOpened || longPressMoved) {
+            return;
+        }
+        longPressOpened = true;
+        clearTimeout(longPressTimeout);
+        isDragging = false;
+        dragPointerId = null;
+        openContextMenu(pos);
+    }
+
+    // 长按坐标在预览上时，系统仍会把 contextmenu 指到下层文档图片。
+    function contextMenuHitsPreview(event: MouseEvent) {
+        return previewOwnsPoint(event.target, event.clientX, event.clientY);
+    }
+
+    function handleWindowContextMenu(event: MouseEvent) {
+        if (!contextMenuHitsPreview(event)) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        if (longPressOpened) {
+            return;
+        }
+        longPressMoved = false;
+        openLongPressMenu({ x: event.clientX, y: event.clientY });
+    }
+
+    function handleWindowClickCapture(event: MouseEvent) {
+        if (!suppressClickUntil || Date.now() > suppressClickUntil) {
+            return;
+        }
+        const menu = window.siyuan?.menus?.menu?.element;
+        if (event.target instanceof Node && menu?.contains(event.target)) {
+            return;
+        }
+        if (!previewOwnsPoint(event.target, event.clientX, event.clientY)) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+    }
+
     function handleWindowTouchStart(event: TouchEvent) {
-        if (isOnFloat(event.target)) {
+        const touch = event.changedTouches[0];
+        const ownsPreview = !!touch && previewOwnsPoint(event.target, touch.clientX, touch.clientY);
+        if (ownsPreview) {
             for (let i = 0; i < event.changedTouches.length; i++) {
                 imageTouchIds.add(event.changedTouches[i].identifier);
             }
@@ -799,14 +893,15 @@
                 event.stopPropagation();
             }
             window.siyuan?.menus?.menu?.remove();
-            if (event.touches.length === 1) {
-                const pos = getEventPosition(event);
-                longPressTimeout = setTimeout(() => {
-                    isDragging = false;
-                    dragPointerId = null;
-                    openContextMenu(pos);
-                }, LONG_PRESS_MS);
+            if (event.touches.length === 1 && !touchOnControl && touch) {
+                const pos = { x: touch.clientX, y: touch.clientY };
+                longPressOrigin = pos;
+                longPressMoved = false;
+                longPressOpened = false;
+                longPressStartedAt = Date.now();
+                longPressTimeout = setTimeout(() => openLongPressMenu(pos), LONG_PRESS_MS);
             } else {
+                longPressMoved = true;
                 clearTimeout(longPressTimeout);
             }
         }
@@ -820,12 +915,16 @@
     }
 
     function handleWindowTouchMove(event: TouchEvent) {
-        if (ownsTouchGesture() && !touchOnControl) {
+        if (event.touches.length === 1) {
+            const touch = event.touches[0];
+            markLongPressMoved(touch.clientX, touch.clientY);
+        } else if (longPressOrigin) {
+            longPressMoved = true;
             clearTimeout(longPressTimeout);
+        }
+        if (ownsTouchGesture() && !touchOnControl) {
             event.preventDefault();
             event.stopPropagation();
-        } else if (ownsTouchGesture()) {
-            clearTimeout(longPressTimeout);
         }
         if (event.touches.length >= 2 && ownsTouchGesture()) {
             event.preventDefault();
@@ -839,6 +938,9 @@
         if (isDragging && event.touches.length === 1 && dragPointerId === null) {
             event.preventDefault();
             const touch = event.touches[0];
+            if (longPressOrigin && !longPressMoved) {
+                return;
+            }
             applyPosition({
                 x: dragOrigin.x + touch.clientX - dragStartPos.x,
                 y: dragOrigin.y + touch.clientY - dragStartPos.y,
@@ -854,7 +956,16 @@
         for (let i = 0; i < event.changedTouches.length; i++) {
             imageTouchIds.delete(event.changedTouches[i].identifier);
         }
+        const held = longPressStartedAt ? Date.now() - longPressStartedAt : 0;
+        const origin = longPressOrigin;
+        const openHeld = event.touches.length === 0 && !longPressOpened && !longPressMoved && !!origin && held >= LONG_PRESS_MS;
         clearTimeout(longPressTimeout);
+        if (openHeld && origin) {
+            longPressOpened = true;
+            isDragging = false;
+            dragPointerId = null;
+            openContextMenu(origin);
+        }
         if (isPinching) {
             const ids = pinchTouchIds;
             const pinchAlive = !!(
@@ -885,12 +996,19 @@
     function handleTouchStart(event: TouchEvent) {
         window.siyuan?.menus?.menu?.remove();
         if (event.touches.length >= 2) {
+            longPressMoved = true;
             clearTimeout(longPressTimeout);
         }
     }
 
-    function handleTouchMove() {
-        clearTimeout(longPressTimeout);
+    function handleTouchMove(event: TouchEvent) {
+        const touch = event.touches[0];
+        if (!touch || event.touches.length !== 1) {
+            longPressMoved = true;
+            clearTimeout(longPressTimeout);
+            return;
+        }
+        markLongPressMoved(touch.clientX, touch.clientY);
     }
 
     function handleTouchEnd() {
@@ -1262,6 +1380,7 @@
             ],
         }).element);
 
+        suppressClickUntil = Date.now() + MENU_CLICK_GUARD_MS;
         menu.popup({ x: pos.x, y: pos.y });
         menu.element.style.zIndex = "999999";
         if (assetPath) {
@@ -1821,7 +1940,7 @@
     .ipp-hit {
         position: absolute;
         inset: 0;
-        z-index: 1;
+        z-index: 0;
         background: rgba(0, 0, 0, 0.01);
         touch-action: none;
         -webkit-touch-callout: none;
@@ -1834,10 +1953,12 @@
         display: block;
         max-width: none !important;
         max-height: none !important;
-        pointer-events: none;
+        pointer-events: auto;
+        -webkit-user-drag: none;
+        -webkit-touch-callout: none;
         transform-origin: center center;
         transition: opacity 0.12s ease;
-        z-index: 0;
+        z-index: 1;
     }
 
     .ipp-image--loading {

@@ -2,6 +2,7 @@
     import { onMount } from "svelte";
     import ImageDetailList from "./ImageDetailList.svelte";
     import type { ImageDetailRow } from "@/service/image/ImageDetailService";
+    import { captureMobileDetailBack } from "@/service/image/mobile-detail-back";
 
     export let title = "";
     export let rows: ImageDetailRow[] = [];
@@ -16,7 +17,9 @@
     let root: HTMLElement;
 
     onMount(() => {
+        const releaseBack = captureMobileDetailBack(() => onClose());
         root?.focus();
+        return releaseBack;
     });
 </script>
 
