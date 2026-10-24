@@ -2,7 +2,7 @@ import { Constants, fetchPost, getFrontend } from "siyuan";
 import { getAssetName, pathPosix } from "../util/pathName";
 import { isBrowser, isMobileClient as isMobile } from "@/utils/electron-util";
 import { exportByMobile, isInAndroid, saveExportFile } from "../protyle/util/compatibility";
-import { canCopyImageToClipboard, notifyCopyFailed, notifyCopySuccess, writePNGBlob } from "@/utils/clipboard";
+import { canCopyImageToClipboard, notifyCopyFailed, notifyCopySuccess, showCopyNotice, writePNGBlob } from "@/utils/clipboard";
 import { getDownloadURL } from "@/utils/image-url";
 
 
@@ -86,7 +86,7 @@ export const copyAssetFile = (src: string) => {
             return;
         }
         if (response?.msg) {
-            window.showMessage?.(response.msg, 6000, "error");
+            showCopyNotice(response.msg, 6000, "error");
             return;
         }
         notifyCopyFailed("file");

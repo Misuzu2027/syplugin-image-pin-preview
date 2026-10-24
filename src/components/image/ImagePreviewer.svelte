@@ -748,6 +748,10 @@
     }
 
     function handlePointerDown(event: PointerEvent) {
+        if (event.button === 2) {
+            longPressOpened = false;
+            return;
+        }
         if (event.button !== 0 && event.button !== 1) {
             return;
         }
