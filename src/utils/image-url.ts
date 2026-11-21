@@ -163,6 +163,29 @@ function formatAssetPath(asset: SameOriginAsset): string {
     return asset.path + (asset.box ? `?box=${encodeURIComponent(asset.box)}` : "");
 }
 
+/** 隐私标记按原图精确匹配，同源资源的缩略图、下载参数和片段共用标记。 */
+export function getImagePrivacyKey(src: string): string {
+    const value = src.trim();
+    if (!value) {
+        return "";
+    }
+    try {
+        const asset = readSameOriginAsset(value);
+        if (asset) {
+            const path = asset.path.split("/").map(encodeURIComponent).join("/");
+            return `asset:${path}${asset.box ? `?box=${encodeURIComponent(asset.box)}` : ""}`;
+        }
+        const url = new URL(value, window.location.href);
+        if (url.protocol === "http:" || url.protocol === "https:") {
+            url.hash = "";
+            return url.href;
+        }
+    } catch {
+        // Invalid or temporary sources do not have a persistent identity.
+    }
+    return "";
+}
+
 /** 同源 assets 路径。加密笔记本资源返回空，调用方不提供重命名和 OCR。 */
 export function getPreviewAssetPath(src: string): string | undefined {
     const asset = readSameOriginAsset(src);

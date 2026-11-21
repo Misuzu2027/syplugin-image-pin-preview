@@ -9,6 +9,7 @@ import { SettingService } from '@/service/setting/SettingService';
 import { CUSTOM_ICON_MAP } from '@/models/icon-constant';
 import { openSettingsDialog } from "@/components/setting/setting-util";
 import { ImageService } from "./service/image/ImageService";
+import { destroyImagePrivacy, initImagePrivacy, refreshImagePrivacy } from "./service/image/ImagePrivacyService";
 
 
 export default class PluginSample extends Plugin {
@@ -16,7 +17,7 @@ export default class PluginSample extends Plugin {
 
     async onload() {
         EnvConfig.ins.init(this);
-        await SettingService.ins.init();
+        await Promise.all([SettingService.ins.init(), initImagePrivacy(this)]);
         ImageService.ins.init();
 
         for (const key in CUSTOM_ICON_MAP) {
@@ -47,6 +48,11 @@ export default class PluginSample extends Plugin {
 
     async onunload() {
         ImageService.ins.destroy();
+        destroyImagePrivacy();
+    }
+
+    async onDataChanged() {
+        await Promise.allSettled([SettingService.ins.init(), refreshImagePrivacy()]);
     }
 
     uninstall() {

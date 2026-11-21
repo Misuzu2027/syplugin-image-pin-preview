@@ -8,9 +8,11 @@
     import { canCopyImageToClipboard, copyPlainText, notifyCopyFailed, notifyCopySuccess } from "@/utils/clipboard";
     import { getImageOCRText, ocrAsset, renameAsset, setImageOCRText } from "@/utils/api";
     import { loadImageDetail, type ImageDetailRow } from "@/service/image/ImageDetailService";
+    import { getImagePrivacyKey, privateImages, setImagePrivate } from "@/service/image/ImagePrivacyService";
+    import { getPrivacyMosaicCells, paintPrivacyMosaic } from "@/service/image/privacy-mosaic";
     import ImageDetailPage from "@/components/image/ImageDetailPage.svelte";
     import ImageDetailWindow from "@/components/image/ImageDetailWindow.svelte";
-    import { getFrontend } from "siyuan";
+    import { getFrontend, showMessage } from "siyuan";
     import { onMount, onDestroy } from "svelte";
     import {
         getEventPosition,
@@ -56,6 +58,7 @@
     const MIN_WIDTH = 80;
     const NAV_MIN_WIDTH = 168;
     const NAV_MIN_HEIGHT = 96;
+    const PRIVACY_CONTROL_HEIGHT = 40;
     const NAME_LIMIT = 18;
     const isMobile = EnvConfig.ins.isMobile;
 
@@ -87,7 +90,16 @@
     let ready = false;
     let loading = false;
     let loadError = false;
+    let imageLoadToken = 0;
     let lastTapTime = 0;
+    let revealedPrivacyKey = "";
+    let privateImageKeys: ReadonlySet<string> = new Set();
+    const unsubscribePrivacy = privateImages.subscribe((keys) => {
+        privateImageKeys = keys;
+        if (revealedPrivacyKey && !keys.has(revealedPrivacyKey)) {
+            relockPrivateImage();
+        }
+    });
 
     let isDragging = false;
     let dragPointerId: number | null = null;
@@ -108,6 +120,7 @@
     let longPressOpened = false;
     let longPressStartedAt = 0;
     let suppressClickUntil = 0;
+    let contextMenuItem: HTMLElement | undefined;
 
     let floatEl: HTMLElement;
     let flashing = false;
@@ -117,6 +130,9 @@
     $: contentH = Math.max(1, naturalH * displayScale);
     $: visual = getVisualSize(naturalW, naturalH, displayScale, rotate);
     $: imageCss = imageFlipCss(rotate, flipH, flipV);
+    $: privacyLocked = isImageLocked(images[currentIndex] || currentSrc, privateImageKeys, revealedPrivacyKey);
+    $: obscureImage = privacyLocked || isImageLocked(currentSrc, privateImageKeys, revealedPrivacyKey);
+    $: unlockInFooter = privacyLocked && needsUnlockFooter(visual.width, visual.height);
     $: fileName = getDisplayImageName(currentSrc || images[currentIndex] || "");
     $: imageTitle = (imageTitles[currentIndex] || "").trim();
     $: distinctTitle = imageTitle && imageTitle !== fileName ? imageTitle : "";
@@ -126,21 +142,25 @@
     $: showCopyPNG = !isMobile && !showCopyFile && canCopyImageToClipboard();
     $: showZoomButtons = !["desktop", "desktop-window"].includes(getFrontend());
     $: toolsExpanded = showOptionButton && (isMobile || !collapseToolbar || toolsOpen || toolsPinned);
-    $: frame = getPreviewFrame(visual.width, visual.height, {
-        head: 0,
-        foot: showOptionButton ? (toolsExpanded ? PREVIEW_CHROME_FOOT : PREVIEW_CHROME_INFO) : 0,
-        minWidth: 0,
-    });
+    $: frame = getPreviewFrame(visual.width, visual.height, previewChrome(showOptionButton, toolsExpanded, unlockInFooter));
     $: showOverlayNav = showOptionButton && showImageNav && images.length > 1 && (isMobile || (visual.width >= NAV_MIN_WIDTH && visual.height >= NAV_MIN_HEIGHT));
     $: showOverlayClose = showOptionButton && showImageNav;
-    $: toolActions = collectToolActions(showZoomButtons, showCopyFile, showCopyPNG, rotate, flipH, flipV, toolsPinned, showImageNav, isMobile ? detailPageOpen : detailOverlay);
-    $: shownTools = visibleToolActions(toolActions, visual.width);
+    $: toolActions = collectToolActions(showZoomButtons, showCopyFile, showCopyPNG, rotate, flipH, flipV, toolsPinned, showImageNav, isMobile ? detailPageOpen : detailOverlay, obscureImage);
+    $: shownTools = visibleToolActions(toolActions, frame.width);
     $: toolsOverflow = shownTools.length < toolActions.length;
 
     let previewImage: HTMLImageElement | undefined;
+    let privacyMosaic: HTMLCanvasElement | undefined;
+    let loadedImage: HTMLImageElement | undefined;
+    $: privacyMosaicCells = getPrivacyMosaicCells(contentW, contentH);
+    $: if (privacyMosaic) paintPrivacyMosaic(privacyMosaic, loadedImage, privacyMosaicCells);
     let navSurface: NavSurfaces = { prev: "light", next: "light", close: "light" };
 
-    function refreshNavSurface() {
+    function refreshNavSurface(locked = obscureImage) {
+        if (locked) {
+            navSurface = { prev: "dark", next: "dark", close: "dark" };
+            return;
+        }
         const image = previewImage;
         if (!image?.complete || !image.naturalWidth || visual.width < 1 || visual.height < 1) {
             return;
@@ -152,7 +172,7 @@
         navSurface = next;
     }
 
-    $: previewImage, rotate, flipH, flipV, visual.width, visual.height, refreshNavSurface();
+    $: previewImage, rotate, flipH, flipV, visual.width, visual.height, refreshNavSurface(obscureImage);
 
     let copiedTipKey = "";
     let copiedTimer: ReturnType<typeof setTimeout> | undefined;
@@ -173,7 +193,11 @@
     $: detailFileName = getImageBasename(currentSrc || images[currentIndex] || "");
     $: detailIndexLabel = images.length ? `[${currentIndex + 1}/${images.length}]` : "";
     $: detailWatchKey = `${detailOverlay}|${detailPageOpen}|${detailWindowOpen}|${currentIndex}|${currentSrc}|${naturalW}|${naturalH}|${loading}`;
-    $: if ((detailOverlay || detailPageOpen || detailWindowOpen) && !loading && currentSrc && detailWatchKey !== detailRequestKey) {
+    $: if (obscureImage) {
+        closeOwnedContextMenu();
+        clearImageDetails();
+    }
+    $: if (!obscureImage && (detailOverlay || detailPageOpen || detailWindowOpen) && !loading && currentSrc && detailWatchKey !== detailRequestKey) {
         detailRequestKey = detailWatchKey;
         void refreshDetail();
     }
@@ -195,6 +219,9 @@
     });
 
     onDestroy(() => {
+        imageLoadToken++;
+        unsubscribePrivacy();
+        closeOwnedContextMenu();
         window.removeEventListener("pointermove", handlePointerMove);
         window.removeEventListener("pointerup", handlePointerUp);
         window.removeEventListener("pointercancel", handlePointerUp);
@@ -218,11 +245,19 @@
     }
 
     export function replaceAssetSrc(oldPath: string, newPath: string) {
+        const pendingSrc = images[currentIndex];
         images = images.map((src) => replaceAssetInSrc(src, oldPath, newPath));
         const nextCurrent = replaceAssetInSrc(currentSrc || images[currentIndex] || "", oldPath, newPath);
         if (nextCurrent && nextCurrent !== currentSrc) {
             currentSrc = nextCurrent;
         }
+        if (loading && images[currentIndex] !== pendingSrc) {
+            openCurrent(!ready);
+        }
+    }
+
+    export function relockPrivateImage() {
+        revealedPrivacyKey = "";
     }
 
     export function flashHighlight() {
@@ -244,21 +279,64 @@
         return EnvConfig.ins.i18n?.[pluginKey] || fallback;
     }
 
-    function chromeSpec() {
-        const expanded = showOptionButton && (isMobile || !collapseToolbar || toolsOpen || toolsPinned);
+    function isImageLocked(src: string, keys = privateImageKeys, revealed = revealedPrivacyKey): boolean {
+        const key = getImagePrivacyKey(src);
+        return !!key && keys.has(key) && key !== revealed;
+    }
+
+    function canAccessImage(src = currentPreviewSrc()): boolean {
+        return !!src && src === currentPreviewSrc() && !isImageLocked(src) && !isImageLocked(images[currentIndex] || "");
+    }
+
+    function imageAction(src: string, action: () => void): () => void {
+        return () => {
+            if (canAccessImage(src)) {
+                action();
+            }
+        };
+    }
+
+    function unlockPrivateImage() {
+        const key = getImagePrivacyKey(images[currentIndex] || currentSrc);
+        if (!key || !privateImageKeys.has(key)) {
+            return;
+        }
+        if (unlockInFooter) {
+            position = { x: position.x + frame.offsetX, y: position.y };
+        }
+        revealedPrivacyKey = key;
+        floatEl?.focus();
+    }
+
+    async function updateImagePrivacy(src: string, value: boolean) {
+        suppressClickUntil = 0;
+        try {
+            await setImagePrivate(src, value);
+        } catch {
+            showMessage(t("privacySaveError", "保存图片隐私标记失败"), 5000, "error");
+        }
+    }
+
+    function needsUnlockFooter(width: number, height: number): boolean {
+        return width < 200 || height < 90;
+    }
+
+    function previewChrome(optionButton: boolean, expanded: boolean, compactUnlock: boolean) {
         return {
             head: 0,
-            foot: showOptionButton ? (expanded ? PREVIEW_CHROME_FOOT : PREVIEW_CHROME_INFO) : 0,
-            minWidth: 0,
+            foot: (optionButton ? (expanded ? PREVIEW_CHROME_FOOT : PREVIEW_CHROME_INFO) : 0)
+                + (compactUnlock ? PRIVACY_CONTROL_HEIGHT : 0),
+            minWidth: compactUnlock ? 136 : 0,
         };
     }
 
     function frameFor(imageWidth: number, imageHeight: number) {
-        return getPreviewFrame(imageWidth, imageHeight, chromeSpec());
+        const compactUnlock = privacyLocked && needsUnlockFooter(imageWidth, imageHeight);
+        return getPreviewFrame(imageWidth, imageHeight, previewChrome(showOptionButton, toolsExpanded, compactUnlock));
     }
 
     function fitReservedFoot() {
-        return showOptionButton ? PREVIEW_CHROME_FOOT : 0;
+        return (showOptionButton ? PREVIEW_CHROME_FOOT : 0) + (unlockInFooter ? PRIVACY_CONTROL_HEIGHT : 0);
     }
 
     function containHeightFor(imageHeight: number, frameHeight: number) {
@@ -344,6 +422,7 @@
         pinned: boolean,
         imageNav: boolean,
         detailActive: boolean,
+        locked: boolean,
     ): PreviewToolAction[] {
         const actions: PreviewToolAction[] = [{
             id: "fit",
@@ -351,19 +430,16 @@
             icon: "#iconRefresh",
             active: false,
             run: fitToViewport,
-        }, {
-            id: "detail",
-            label: t("imageDetail", "图片详情"),
-            icon: "#iconInfo",
-            active: detailActive,
-            run: () => {
-                if (isMobile) {
-                    openDetailPage();
-                    return;
-                }
-                toggleDetailOverlay();
-            },
         }];
+        if (!locked) {
+            actions.push({
+                id: "detail",
+                label: t("imageDetail", "图片详情"),
+                icon: "#iconInfo",
+                active: detailActive,
+                run: isMobile ? openDetailPage : toggleDetailOverlay,
+            });
+        }
         if (zoomButtons) {
             actions.push(
                 {
@@ -388,7 +464,7 @@
                 label: window.siyuan.languages.copyFile || t("copyFile", "复制文件"),
                 icon: "#iconFile",
                 active: false,
-                run: () => copyAssetFile(currentSrc),
+                run: copyCurrentFile,
             }
             : copyPng
                 ? {
@@ -396,7 +472,7 @@
                     label: window.siyuan.languages.copyAsPNG || t("copyAsPNG", "复制为 PNG"),
                     icon: "#iconImage",
                     active: false,
-                    run: () => copyPNGByLink(currentSrc),
+                    run: copyCurrentFile,
                 }
                 : isMobile
                     ? {
@@ -411,7 +487,11 @@
                         label: window.siyuan.languages.export,
                         icon: "#iconUpload",
                         active: false,
-                        run: () => exportAsset(currentSrc),
+                        run: () => {
+                            if (canAccessImage(currentSrc)) {
+                                exportAsset(currentSrc);
+                            }
+                        },
                     };
         if (!isMobile) {
             actions.push({
@@ -422,8 +502,10 @@
                 run: () => setActualSize(),
             });
         }
+        if (!locked) {
+            actions.push(copyAction);
+        }
         actions.push(
-            copyAction,
             {
                 id: "rotateRight",
                 label: t("rotateRight", "向右旋转", "rotateCw"),
@@ -556,13 +638,18 @@
         loading = true;
         loadError = false;
         copiedTipKey = "";
+        const token = ++imageLoadToken;
         const keepWidth = visual.width;
         const oldStage = stageRect();
         const oldVisual = { ...visual };
         const loader = new Image();
         loader.onload = () => {
+            if (token !== imageLoadToken) {
+                return;
+            }
             naturalW = loader.naturalWidth;
             naturalH = loader.naturalHeight;
+            loadedImage = loader;
             currentSrc = src;
             rotate = 0;
             flipH = false;
@@ -590,6 +677,10 @@
             preloadNeighbors();
         };
         loader.onerror = () => {
+            if (token !== imageLoadToken) {
+                return;
+            }
+            loadedImage = undefined;
             currentSrc = src;
             loadError = true;
             loading = false;
@@ -609,7 +700,11 @@
         if (!images.length) {
             return;
         }
-        currentIndex = (index + images.length) % images.length;
+        const nextIndex = (index + images.length) % images.length;
+        if (currentIndex !== nextIndex) {
+            relockPrivateImage();
+            currentIndex = nextIndex;
+        }
         openCurrent(false);
     }
 
@@ -1065,15 +1160,23 @@
 
     function copyForSiYuan() {
         const src = currentPreviewSrc();
-        copyText(getSiYuanImageMarkdown(src, getDisplayImageName(src)));
+        if (canAccessImage(src)) {
+            copyText(getSiYuanImageMarkdown(src, getDisplayImageName(src)));
+        }
     }
 
     function copyFullLink() {
-        copyText(getReachableImageURL(currentPreviewSrc()));
+        const src = currentPreviewSrc();
+        if (canAccessImage(src)) {
+            copyText(getReachableImageURL(src));
+        }
     }
 
     function copyCurrentFile() {
         const src = currentPreviewSrc();
+        if (!canAccessImage(src)) {
+            return;
+        }
         if (showCopyFile) {
             copyAssetFile(src);
             return;
@@ -1181,6 +1284,9 @@
         if (mod && event.shiftKey && key === "c") {
             event.preventDefault();
             event.stopImmediatePropagation();
+            if (!canAccessImage()) {
+                return;
+            }
             if (isMobile) {
                 copyForSiYuan();
                 return;
@@ -1233,25 +1339,18 @@
         menu.append(new MenuItem({ type: "separator" }).element);
     }
 
-    function openContextMenu(pos: Vector2) {
-        window.siyuan.menus.menu.remove();
-        const menu = window.siyuan.menus.menu;
-        const src = currentPreviewSrc();
+    function appendImageFileMenu(menu: { append: (element: HTMLElement) => void }, src: string) {
         const frontend = getFrontend();
-        menu.append(new MenuItem({ icon: "ippIconPrev", label: t("prevImage", "上一张", "previous"), click: handlePrev }).element);
-        menu.append(new MenuItem({ icon: "ippIconNext", label: t("nextImage", "下一张", "next"), click: handleNext }).element);
-        menu.append(new MenuItem({ icon: "iconClose", label: t("closeImage", "关闭图片", "close"), click: handleCloseClick }).element);
-        appendSeparator(menu);
         if (isLocalPath(src) && (frontend === "desktop" || frontend === "desktop-window")) {
             menu.append(new MenuItem({
                 icon: "iconFolder",
                 label: t("openFileLocation", "打开文件位置"),
-                click: () => openBy(src, "folder"),
+                click: imageAction(src, () => openBy(src, "folder")),
             }).element);
             menu.append(new MenuItem({
                 icon: "iconOpen",
                 label: window.siyuan.languages.useDefault,
-                click: () => openBy(src, "app"),
+                click: imageAction(src, () => openBy(src, "app")),
             }).element);
         }
         if ((frontend === "mobile" || frontend === "browser-mobile") && src) {
@@ -1260,52 +1359,92 @@
                 id: useSystemApp ? "useDefault" : "useBrowserView",
                 icon: "iconOpen",
                 label: useSystemApp ? window.siyuan.languages.useDefault : window.siyuan.languages.useBrowserView,
-                click: () => openByMobile(src),
+                click: imageAction(src, () => openByMobile(src)),
             }).element);
         }
         menu.append(new MenuItem({
             label: window.siyuan.languages.export,
             icon: "iconUpload",
-            click: () => exportAsset(src),
+            click: imageAction(src, () => exportAsset(src)),
         }).element);
         appendSeparator(menu);
         menu.append(new MenuItem({
             icon: "iconCopy",
             label: t("copyForSiYuan", "复制", "copy"),
-            click: copyForSiYuan,
+            click: imageAction(src, copyForSiYuan),
         }).element);
         menu.append(new MenuItem({
             icon: "iconLink",
             label: t("copyFullLink", "复制网页链接"),
-            click: copyFullLink,
+            click: imageAction(src, copyFullLink),
         }).element);
         if (showCopyPNG) {
             menu.append(new MenuItem({
                 icon: "iconImage",
                 label: window.siyuan.languages.copyAsPNG,
-                click: () => copyPNGByLink(src),
+                click: imageAction(src, () => copyPNGByLink(src)),
             }).element);
         }
         if (showCopyFile) {
             menu.append(new MenuItem({
                 icon: "iconFile",
                 label: window.siyuan.languages.copyFile || t("copyFile", "复制文件"),
-                click: () => copyAssetFile(src),
+                click: imageAction(src, () => copyAssetFile(src)),
             }).element);
         }
         appendSeparator(menu);
         menu.append(new MenuItem({
             icon: "iconInfo",
             label: t("imageDetail", "图片详情"),
-            click: () => {
+            click: imageAction(src, () => {
                 if (isMobile) {
                     openDetailPage();
                     return;
                 }
                 openDetailWindow();
-            },
+            }),
         }).element);
         appendSeparator(menu);
+    }
+
+    function closeOwnedContextMenu() {
+        if (contextMenuItem?.isConnected) {
+            window.siyuan.menus.menu.remove();
+        }
+        contextMenuItem = undefined;
+    }
+
+    function openContextMenu(pos: Vector2) {
+        window.siyuan.menus.menu.remove();
+        const menu = window.siyuan.menus.menu;
+        const src = currentPreviewSrc();
+        const selectedSrc = images[currentIndex] || src;
+        const privacyKey = getImagePrivacyKey(selectedSrc);
+        const canAccess = canAccessImage(src);
+        contextMenuItem = new MenuItem({ icon: "ippIconPrev", label: t("prevImage", "上一张", "previous"), click: handlePrev }).element;
+        menu.append(contextMenuItem);
+        menu.append(new MenuItem({ icon: "ippIconNext", label: t("nextImage", "下一张", "next"), click: handleNext }).element);
+        menu.append(new MenuItem({ icon: "iconClose", label: t("closeImage", "关闭图片", "close"), click: handleCloseClick }).element);
+        appendSeparator(menu);
+        if (privacyKey) {
+            const marked = privateImageKeys.has(privacyKey);
+            if (isImageLocked(selectedSrc)) {
+                menu.append(new MenuItem({
+                    icon: "iconEye",
+                    label: t("privacyUnlock", "解锁查看"),
+                    click: unlockPrivateImage,
+                }).element);
+            }
+            menu.append(new MenuItem({
+                icon: "iconEyeoff",
+                label: marked ? t("privacyUnmark", "取消隐私") : t("privacyMark", "设为隐私图片"),
+                click: () => updateImagePrivacy(selectedSrc, !marked),
+            }).element);
+            appendSeparator(menu);
+        }
+        if (canAccess) {
+            appendImageFileMenu(menu, src);
+        }
         menu.append(new MenuItem({
             icon: "iconImage",
             label: t("viewMenu", "视图"),
@@ -1322,14 +1461,14 @@
             ],
         }).element);
         appendSeparator(menu);
-        const assetPath = getPreviewAssetPath(src);
+        const assetPath = canAccess ? getPreviewAssetPath(src) : undefined;
         const ocrState = { skip: false, original: "" };
         if (assetPath) {
             menu.append(new MenuItem({
                 id: "rename",
                 icon: "iconEdit",
                 label: window.siyuan.languages.rename,
-                click: () => renameCurrentAsset(assetPath),
+                click: imageAction(src, () => renameCurrentAsset(assetPath)),
             }).element);
             menu.append(new MenuItem({
                 id: "ocr",
@@ -1344,7 +1483,7 @@
                             return;
                         }
                         getImageOCRText(assetPath).then((text) => {
-                            if (!textarea.value) {
+                            if (canAccessImage(src) && !textarea.value) {
                                 textarea.value = text;
                                 ocrState.original = text;
                             }
@@ -1356,10 +1495,10 @@
                 }, {
                     id: "reOCR",
                     label: window.siyuan.languages.reOCR,
-                    click() {
+                    click: imageAction(src, () => {
                         ocrState.skip = true;
                         ocrAsset(assetPath);
-                    },
+                    }),
                 }],
             }).element);
             appendSeparator(menu);
@@ -1389,7 +1528,7 @@
         menu.element.style.zIndex = "999999";
         if (assetPath) {
             menu.removeCB = () => {
-                if (ocrState.skip) {
+                if (ocrState.skip || !canAccessImage(src)) {
                     return;
                 }
                 const textarea = menu.element.querySelector('[data-type="ocr"]') as HTMLTextAreaElement | null;
@@ -1432,7 +1571,7 @@
     function copyOverlayText(event: MouseEvent, key: string, text: string) {
         event.preventDefault();
         event.stopPropagation();
-        if (!text) {
+        if (!text || !canAccessImage()) {
             return;
         }
         copyPlainText(text).then((ok) => {
@@ -1516,14 +1655,21 @@
     }
 
     function toggleDetailOverlay() {
-        detailOverlay = !detailOverlay;
+        if (canAccessImage()) {
+            detailOverlay = !detailOverlay;
+        }
     }
 
     function openDetailPage() {
-        detailPageOpen = true;
+        if (canAccessImage()) {
+            detailPageOpen = true;
+        }
     }
 
     function openDetailWindow() {
+        if (!canAccessImage()) {
+            return;
+        }
         if (!detailWindowPlaced) {
             const placed = placeDetailWindow();
             detailWindowX = placed.x;
@@ -1531,6 +1677,17 @@
             detailWindowPlaced = true;
         }
         detailWindowOpen = true;
+    }
+
+    function clearImageDetails() {
+        detailToken++;
+        detailOverlay = false;
+        detailPageOpen = false;
+        detailWindowOpen = false;
+        detailRows = [];
+        detailLoading = false;
+        detailPartial = false;
+        detailRequestKey = "";
     }
 
     async function refreshDetail() {
@@ -1570,7 +1727,7 @@
     class:ipp-float--flash={flashing}
     class:ipp-float--chrome={showOptionButton}
     tabindex="0"
-    style="left:{position.x}px;top:{position.y}px;width:{frame.width}px;height:{frame.height}px;--ipp-info:{PREVIEW_CHROME_INFO}px;--ipp-tools:{PREVIEW_CHROME_TOOLS}px;--ipp-stage-h:{visual.height}px"
+    style="left:{position.x}px;top:{position.y}px;width:{frame.width}px;height:{frame.height}px;--ipp-info:{PREVIEW_CHROME_INFO}px;--ipp-tools:{PREVIEW_CHROME_TOOLS}px;--ipp-stage-h:{visual.height}px;--ipp-privacy-control-h:{PRIVACY_CONTROL_HEIGHT}px"
     on:pointerdown={handlePointerDown}
     on:contextmenu|stopPropagation={handleContextmenu}
     on:touchstart={handleTouchStart}
@@ -1597,17 +1754,27 @@
                     bind:this={previewImage}
                     class="ipp-image"
                     class:ipp-image--loading={loading}
+                    class:ipp-image--private={obscureImage}
                     src={currentSrc}
-                    alt={fileName || "image"}
+                    alt={obscureImage ? "" : fileName || "image"}
                     draggable="false"
                     style="width:{contentW}px;height:{contentH}px;transform:{imageCss};"
-                    on:load={refreshNavSurface}
+                    on:load={() => refreshNavSurface()}
                 />
             {/if}
-            {#if loadError}
+            {#if obscureImage}
+                <canvas
+                    bind:this={privacyMosaic}
+                    class="ipp-image ipp-privacy-mosaic"
+                    style="width:{contentW}px;height:{contentH}px;transform:{imageCss};"
+                    aria-hidden="true"
+                ></canvas>
+                <div class="ipp-privacy-mask"></div>
+            {/if}
+            {#if loadError && !obscureImage}
                 <div class="ipp-status">{t("imageLoadFailed", "图片加载失败")}</div>
             {/if}
-            {#if detailOverlay && !isMobile}
+            {#if detailOverlay && !isMobile && !obscureImage}
                 <div
                     class="ipp-detail-overlay"
                     on:pointerdown|stopPropagation
@@ -1637,6 +1804,18 @@
         </div>
     </div>
 
+    {#if privacyLocked}
+        <div class="ipp-privacy-control" class:ipp-privacy-control--footer={unlockInFooter}>
+            <button
+                type="button"
+                class="ipp-privacy-unlock"
+                on:click|stopPropagation={unlockPrivateImage}
+                on:pointerdown|stopPropagation
+                on:dblclick|stopPropagation
+            >{t("privacyUnlock", "解锁查看")}</button>
+        </div>
+    {/if}
+
     {#if showOptionButton}
         <div
             class="ipp-foot"
@@ -1646,7 +1825,9 @@
         >
             <div class="ipp-info">
                 <div class="ipp-info__names">
-                    {#if fileName}
+                    {#if obscureImage}
+                        <span>{t("privacyLocked", "隐私图片")}</span>
+                    {:else if fileName}
                         <span class="ipp-copy" on:pointerenter={(event) => syncNameCut(event, "name", fileName)} on:pointerleave={() => leaveCopy("name")}>
                             <button
                                 type="button"
@@ -1663,7 +1844,7 @@
                             </span>
                         </span>
                     {/if}
-                    {#if distinctTitle}
+                    {#if distinctTitle && !obscureImage}
                         <span class="ipp-copy" on:pointerenter={(event) => syncNameCut(event, "title", distinctTitle)} on:pointerleave={() => leaveCopy("title")}>
                             <button
                                 type="button"
@@ -1684,7 +1865,7 @@
                 {#if images.length}
                     <span class="ipp-info__index">{currentIndex + 1} / {images.length}</span>
                 {/if}
-                {#if naturalW && naturalH}
+                {#if naturalW && naturalH && !obscureImage}
                     <span class="ipp-info__dim">{naturalW} × {naturalH}</span>
                 {/if}
             </div>
@@ -1718,7 +1899,7 @@
         </div>
     {/if}
 </div>
-{#if detailWindowOpen && !isMobile}
+{#if detailWindowOpen && !isMobile && !obscureImage}
     <ImageDetailWindow
         bind:x={detailWindowX}
         bind:y={detailWindowY}
@@ -1733,7 +1914,7 @@
         onClose={() => detailWindowOpen = false}
     />
 {/if}
-{#if detailPageOpen && isMobile}
+{#if detailPageOpen && isMobile && !obscureImage}
     <ImageDetailPage
         title={t("imageDetail", "图片详情")}
         rows={detailRows}
@@ -1967,6 +2148,72 @@
 
     .ipp-image--loading {
         opacity: 0.75;
+    }
+
+    .ipp-image--private {
+        opacity: 0;
+        transition: none;
+        pointer-events: none;
+    }
+
+    .ipp-privacy-mosaic {
+        image-rendering: pixelated;
+        pointer-events: none;
+    }
+
+    .ipp-privacy-mask {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        background: rgba(22, 27, 35, 0.16);
+        pointer-events: none;
+    }
+
+    .ipp-privacy-control {
+        position: absolute;
+        inset: 0 0 auto;
+        z-index: 3;
+        display: flex;
+        height: var(--ipp-stage-h);
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+    }
+
+    .ipp-privacy-control--footer {
+        position: relative;
+        height: var(--ipp-privacy-control-h);
+        flex: none;
+        background: var(--ipp-panel-bg);
+    }
+
+    .ipp-privacy-control--footer:last-child {
+        border-radius: 0 0 8px 8px;
+    }
+
+    .ipp-privacy-unlock {
+        box-sizing: border-box;
+        max-width: 100%;
+        min-height: 32px;
+        margin: 0;
+        padding: 4px 12px;
+        border: 1px solid rgba(255, 255, 255, 0.65);
+        border-radius: 6px;
+        background: #242a33;
+        color: #fff;
+        font-size: 13px;
+        line-height: 18px;
+        cursor: pointer;
+        pointer-events: auto;
+    }
+
+    .ipp-privacy-unlock:hover {
+        background: #394352;
+    }
+
+    .ipp-privacy-unlock:focus-visible {
+        outline: 2px solid #fff;
+        outline-offset: 2px;
     }
 
     .ipp-status {

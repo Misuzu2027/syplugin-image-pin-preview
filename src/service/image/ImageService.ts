@@ -3,12 +3,17 @@ import { SettingService } from "../setting/SettingService";
 import ImagePreviewerSvelte from "@/components/image/ImagePreviewer.svelte";
 import { getCurrentAttrViewImages, getDocImageAssets } from "@/utils/api";
 import { SvelteComponent } from "svelte";
+import { showMessage, type IEventBusMap } from "siyuan";
+import { EnvConfig } from "@/config/EnvConfig";
 import { ensureCurrentInList, findImageIndex, removeCompressURL, replaceAssetInSrc, sameImageList } from "@/utils/image-url";
+import { destroyImagePrivacyDom, initImagePrivacyDom, relockImagePrivacyDom } from "./ImagePrivacyDom";
+import { getImagePrivacyKey, isImagePrivate, replacePrivateAssetPath, setImagePrivate } from "./ImagePrivacyService";
 
 interface ImagePreviewerInstance extends SvelteComponent {
     getCurrentSrc: () => string;
     flashHighlight: () => void;
     replaceAssetSrc: (oldPath: string, newPath: string) => void;
+    relockPrivateImage: () => void;
 }
 
 interface PreviewSession {
@@ -33,10 +38,12 @@ export class ImageService {
 
     init() {
         bindPreviewEvents();
+        initImagePrivacyDom();
     }
 
     destroy() {
         unbindPreviewEvents();
+        destroyImagePrivacyDom();
         closeAllPreviews();
     }
 }
@@ -55,6 +62,9 @@ function bindPreviewEvents() {
     eventsBound = true;
     document.addEventListener("click", handleCaptureClick, true);
     document.addEventListener("dblclick", handleCaptureDblClick, true);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    EnvConfig.ins.plugin.eventBus.on("open-menu-image", addImagePrivacyMenu);
+    EnvConfig.ins.plugin.eventBus.on("switch-protyle", handleDocumentSwitch);
 }
 
 function unbindPreviewEvents() {
@@ -64,6 +74,53 @@ function unbindPreviewEvents() {
     eventsBound = false;
     document.removeEventListener("click", handleCaptureClick, true);
     document.removeEventListener("dblclick", handleCaptureDblClick, true);
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+    EnvConfig.ins.plugin.eventBus.off("open-menu-image", addImagePrivacyMenu);
+    EnvConfig.ins.plugin.eventBus.off("switch-protyle", handleDocumentSwitch);
+}
+
+function handleDocumentSwitch() {
+    relockImagePrivacyDom();
+    relockPreviews();
+}
+
+function relockPreviews() {
+    for (const session of previewSessions) {
+        session.component?.relockPrivateImage();
+    }
+}
+
+function handleVisibilityChange() {
+    if (document.hidden) {
+        relockPreviews();
+    }
+}
+
+function addImagePrivacyMenu(event: CustomEvent<IEventBusMap["open-menu-image"]>) {
+    const { element, menu } = event.detail;
+    const image = element instanceof HTMLImageElement ? element : element.querySelector("img");
+    const src = image?.getAttribute("src") || image?.getAttribute("data-src") || "";
+    if (!getImagePrivacyKey(src)) {
+        return;
+    }
+    const { i18n } = EnvConfig.ins;
+    const marked = isImagePrivate(src);
+    menu.addItem({
+        id: "ipp-privacy",
+        icon: marked ? "iconEye" : "iconEyeoff",
+        label: marked ? i18n.privacyUnmark || "取消隐私" : i18n.privacyMark || "设为隐私图片",
+        click: async () => {
+            try {
+                await setImagePrivate(src, !marked);
+            } catch {
+                showPrivacySaveError();
+            }
+        },
+    });
+}
+
+function showPrivacySaveError() {
+    showMessage(EnvConfig.ins.i18n.privacySaveError || "保存图片隐私标记失败", 5000, "error");
 }
 
 function isPluginOpen(): boolean {
@@ -166,43 +223,37 @@ function shouldOpenPreview(key: string): boolean {
 }
 
 async function handleCaptureClick(event: MouseEvent) {
-    if (!isPluginOpen() || event.button !== 0 || isInsidePreviewer(event.target)) {
-        return;
-    }
-    if (event.altKey) {
+    if (event.button !== 0 || isInsidePreviewer(event.target)) {
         return;
     }
     const image = asImageElement(event.target);
-    if (!image) {
+    if (!image || (!isAvAssetImage(image) && !isPreviewModeImage(image)) || !shouldUsePluginPreview(event, image)) {
         return;
     }
-    if (isAvAssetImage(image) || isPreviewModeImage(image)) {
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-        if (isAvAssetImage(image)) {
-            await openFromAvImage(image, event.ctrlKey || event.metaKey);
-        } else {
-            await openFromEditorImage(image, event.ctrlKey || event.metaKey);
-        }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (isAvAssetImage(image)) {
+        await openFromAvImage(image, event.ctrlKey || event.metaKey);
+    } else {
+        await openFromEditorImage(image, event.ctrlKey || event.metaKey);
     }
 }
 
 async function handleCaptureDblClick(event: MouseEvent) {
-    if (!isPluginOpen() || isInsidePreviewer(event.target)) {
-        return;
-    }
-    if (event.altKey) {
+    if (isInsidePreviewer(event.target)) {
         return;
     }
     const image = asImageElement(event.target);
-    if (!image || !isEditorContentImage(image) || isPreviewModeImage(image)) {
+    if (!image || !isEditorContentImage(image) || isPreviewModeImage(image) || !shouldUsePluginPreview(event, image)) {
         return;
     }
     event.preventDefault();
-    event.stopPropagation();
     event.stopImmediatePropagation();
     await openFromEditorImage(image, event.ctrlKey || event.metaKey);
+}
+
+function shouldUsePluginPreview(event: MouseEvent, image: HTMLImageElement): boolean {
+    return (isPluginOpen() && !event.altKey) || isImagePrivate(image.getAttribute("src") || "");
 }
 
 async function openFromEditorImage(image: HTMLImageElement, localOnly: boolean) {
@@ -342,6 +393,7 @@ function focusExistingPreview(images: string[], currentSrc: string): boolean {
 }
 
 function replacePreviewAssetPath(oldPath: string, newPath: string) {
+    void replacePrivateAssetPath(oldPath, newPath).catch(showPrivacySaveError);
     for (const session of previewSessions) {
         session.images = session.images.map((src) => replaceAssetInSrc(src, oldPath, newPath));
         session.component?.replaceAssetSrc(oldPath, newPath);

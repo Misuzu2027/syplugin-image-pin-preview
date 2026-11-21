@@ -1,0 +1,21 @@
+.ipp-privacy-local-host {
+    position: relative !important;
+}
+
+.ipp-privacy-dom-mask {
+    display: contents !important;
+}
+
+.ipp-privacy-native-locked {
+    .viewer-copy,
+    .viewer-copy-file,
+    .viewer-copy-url,
+    .viewer-live-photo,
+    .live-photo-preview {
+        display: none !important;
+    }
+}
+
+.ipp-privacy-native-has-private .viewer-play {
+    display: none !important;
+}

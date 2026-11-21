@@ -14,11 +14,12 @@ Double-click images in the editor, or click images in a database, to pin the ima
 * On mobile, pinch to zoom; one finger can stay on the image while the other is outside it
 * Shows the image title and file name; click to copy
 * Copy file or copy as PNG from the toolbar or context menu
+* Choose **Mark as private** in the image context menu or the floating preview’s **More actions** menu. All uses of the same resource in documents, databases, and previews are obscured. **Unlock to view** reveals only that instance until you switch images, close the preview, or leave the page. The mark is saved for future sessions. SiYuan still manages access to the original file.
 
 ## Tips
 
 * Hold `Ctrl` when opening to preview only images already loaded in the current editor or database view
-* Hold `Alt` (Option on macOS) and use the usual gesture to open SiYuan’s native preview: double-click in the editor, single-click in a database or preview mode
+* Hold `Alt` (Option on macOS) and use the usual gesture to open SiYuan’s native preview. Double-click in the editor, or single-click in a database or preview mode. Private images open in the floating preview and also require unlocking if you navigate to one within SiYuan’s native preview.
 * `Esc` closes; `←` `→` or `A` `D` switches images
 * `R` / `L` rotate, `H` / `V` flip, `0` fit, `1` actual size
 * Double-click the image to toggle fit and the last zoom
