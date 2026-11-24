@@ -1,4 +1,9 @@
 {
+    "showImageTools": "Expand toolbar",
+    "hideImageTools": "Collapse toolbar",
+    "shareAsset": "Share",
+    "saveToGallery": "Save to gallery",
+    "resizeDetailSheet": "Switch between half and full screen",
     "openDocumentSearchTab": "Open Document-based Search Tab",
     "table": "Table",
     "mathBlock": "Formula block",

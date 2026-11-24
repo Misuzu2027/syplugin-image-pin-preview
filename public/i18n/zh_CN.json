@@ -1,4 +1,9 @@
 {
+    "showImageTools": "展开工具栏",
+    "hideImageTools": "收起工具栏",
+    "shareAsset": "分享",
+    "saveToGallery": "保存到相册",
+    "resizeDetailSheet": "切换半屏或全屏",
     "openDocumentSearchTab": "打开搜索页签",
     "table": "表格",
     "mathBlock": "公式块",

@@ -165,6 +165,8 @@ interface Window {
         toBlob: (element: Element) => Promise<Blob>
     };
     JSAndroid: {
+        shareAsset?(src: string): void
+        saveAssetToGallery?(src: string): void
         returnDesktop(): void
         openExternal(url: string): void
         exportByDefault(url: string): void
@@ -179,6 +181,7 @@ interface Window {
         getBlockURL(): string
     }
     JSHarmony: {
+        shareAsset?(src: string): void
         openExternal(url: string): void
         exportByDefault(url: string): void
         saveExportFile(url: string): void

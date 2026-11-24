@@ -1,4 +1,25 @@
 import { focusByRange } from "../../util/selection";
+import { getMobileAssetPath } from "@/utils/image-url";
+
+export function getMobileImageActions(src: string) {
+    const actions: { share?: () => void; saveToGallery?: () => void } = {};
+    if (new URLSearchParams(window.location.search).get("remote") === "1") {
+        return actions;
+    }
+    const path = getMobileAssetPath(src);
+    if (!path) {
+        return actions;
+    }
+    const android = isInAndroid();
+    const bridge = android || isInHarmony();
+    if (bridge && typeof bridge.shareAsset === "function") {
+        actions.share = () => bridge.shareAsset(path);
+    }
+    if (android && typeof android.saveAssetToGallery === "function") {
+        actions.saveToGallery = () => android.saveAssetToGallery(path);
+    }
+    return actions;
+}
 
 
 export const openByMobile = (uri: string) => {

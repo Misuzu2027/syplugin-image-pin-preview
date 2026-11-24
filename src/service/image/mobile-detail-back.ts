@@ -2,19 +2,14 @@
 // 详情页打开期间先关掉自己；浏览器返回走 history，同样先关详情。
 const HISTORY_KEY = "ippDetailBack";
 
-interface DetailCapture {
-    close: () => void;
-    token: number;
-    pushed: boolean;
-}
-
 interface DetailHistoryState {
     [HISTORY_KEY]?: number;
 }
 
-const stack: DetailCapture[] = [];
+const stack: Array<() => void> = [];
 let tokenSeq = 0;
-let ignorePop = false;
+let historyToken: number | undefined;
+let releasingHistory = false;
 let wrappedGoBack: (() => void) | undefined;
 let siyuanGoBack: (() => void) | undefined;
 
@@ -39,16 +34,20 @@ function siyuanOverlayOwnsBack(): boolean {
 }
 
 function onPopState(event: PopStateEvent) {
-    if (ignorePop) {
-        ignorePop = false;
-        return;
-    }
-    const top = stack[stack.length - 1];
-    if (!top?.pushed || readToken(event.state) === top.token) {
+    if (historyToken === undefined || readToken(event.state) === historyToken) {
         return;
     }
     event.stopImmediatePropagation();
-    top.close();
+    historyToken = undefined;
+    const top = stack[stack.length - 1];
+    if (releasingHistory) {
+        releasingHistory = false;
+        if (top) pushHistory();
+        else restoreBackCapture();
+    } else if (top) {
+        if (stack.length > 1) pushHistory();
+        top();
+    }
 }
 
 function onGoBack() {
@@ -57,7 +56,7 @@ function onGoBack() {
         siyuanGoBack?.();
         return;
     }
-    top.close();
+    top();
 }
 
 function installBackCapture() {
@@ -72,53 +71,44 @@ function installBackCapture() {
 
 function restoreBackCapture() {
     window.removeEventListener("popstate", onPopState, true);
-    ignorePop = false;
     if (wrappedGoBack && window.goBack === wrappedGoBack) {
         window.goBack = siyuanGoBack;
-        wrappedGoBack = undefined;
     }
+    wrappedGoBack = undefined;
 }
 
-function pushHistory(token: number): boolean {
+function pushHistory() {
     try {
+        const token = ++tokenSeq;
         const previous = history.state;
         const base = previous && typeof previous === "object" ? { ...previous } : {};
         history.pushState({ ...base, [HISTORY_KEY]: token }, "");
-        return true;
+        historyToken = token;
     } catch (error) {
         console.error("image detail back history failed:", error);
-        return false;
     }
 }
 
-function release(token: number) {
-    const index = stack.findIndex((item) => item.token === token);
+function release(close: () => void) {
+    const index = stack.indexOf(close);
     if (index < 0) {
         return;
     }
-    const removed = stack[index];
     stack.splice(index, 1);
-    const shouldPop = removed.pushed && readToken(history.state) === removed.token;
-    if (stack.length === 0) {
+    if (stack.length || releasingHistory) return;
+    if (historyToken !== undefined && readToken(history.state) === historyToken) {
+        releasingHistory = true;
+        history.back();
+    } else {
+        historyToken = undefined;
         restoreBackCapture();
     }
-    if (!shouldPop) {
-        return;
-    }
-    if (stack.length > 0) {
-        ignorePop = true;
-    }
-    history.back();
 }
 
 export function captureMobileDetailBack(close: () => void): () => void {
-    const token = ++tokenSeq;
-    const capture: DetailCapture = {
-        close,
-        token,
-        pushed: pushHistory(token),
-    };
-    stack.push(capture);
+    // 所有面板共用一条浏览历史，关闭底层预览时不会留下空的返回步骤。
+    if (!stack.length && !releasingHistory) pushHistory();
+    stack.push(close);
     installBackCapture();
-    return () => release(token);
+    return () => release(close);
 }

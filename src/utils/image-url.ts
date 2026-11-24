@@ -163,6 +163,16 @@ function formatAssetPath(asset: SameOriginAsset): string {
     return asset.path + (asset.box ? `?box=${encodeURIComponent(asset.box)}` : "");
 }
 
+/** 原生桥自行解码路径、检查笔记本解锁状态，只传原图和所属笔记本。 */
+export function getMobileAssetPath(src: string): string | undefined {
+    const asset = readSameOriginAsset(src);
+    if (!asset || asset.path.endsWith("/")) {
+        return;
+    }
+    const url = new URL(src, window.location.origin + "/");
+    return url.pathname.slice(1) + (asset.box ? `?box=${encodeURIComponent(asset.box)}` : "");
+}
+
 /** 隐私标记按原图精确匹配，同源资源的缩略图、下载参数和片段共用标记。 */
 export function getImagePrivacyKey(src: string): string {
     const value = src.trim();

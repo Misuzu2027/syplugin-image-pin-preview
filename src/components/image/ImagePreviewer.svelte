@@ -2,7 +2,7 @@
     import { openBy } from "@/libs/siyuan/editor/util";
     import { inputDialogSync } from "@/libs/dialog";
     import { MenuItem } from "@/libs/siyuan/menus/Menu";
-    import { isInAndroid, isInHarmony, openByMobile } from "@/libs/siyuan/protyle/util/compatibility";
+    import { getMobileImageActions, isInAndroid, isInHarmony, openByMobile } from "@/libs/siyuan/protyle/util/compatibility";
     import { copyAssetFile, copyPNGByLink, exportAsset, getCopyFilePath } from "@/libs/siyuan/menus/util";
     import { getAssetName, isLocalPath } from "@/libs/siyuan/util/pathName";
     import { canCopyImageToClipboard, copyPlainText, notifyCopyFailed, notifyCopySuccess } from "@/utils/clipboard";
@@ -13,7 +13,7 @@
     import ImageDetailPage from "@/components/image/ImageDetailPage.svelte";
     import ImageDetailWindow from "@/components/image/ImageDetailWindow.svelte";
     import { getFrontend, showMessage } from "siyuan";
-    import { onMount, onDestroy } from "svelte";
+    import { onMount, onDestroy, tick } from "svelte";
     import {
         getEventPosition,
         Vector2,
@@ -52,6 +52,9 @@
     export let onAssetPathReplaced: (oldPath: string, newPath: string) => void = () => {};
 
     const DOUBLE_TAP_THRESHOLD = 300;
+    const NAV_TOUCH_SIZE = 44;
+    const COMPACT_NAV_SIZE = 40;
+    const COMPACT_FOOT_WIDTH = 160;
     const LONG_PRESS_MS = 350;
     const LONG_PRESS_SLOP = 12;
     const MENU_CLICK_GUARD_MS = 700;
@@ -74,6 +77,9 @@
     let showImageNav = SettingService.ins.SettingConfig?.showImageNav !== false;
     let collapseToolbar = SettingService.ins.SettingConfig?.collapseToolbar !== false;
     let toolsOpen = false;
+    let mobileToolsOpen = false;
+    let mobileBrowseWidth = 0;
+    let mobileNavRow: HTMLElement;
     let toolsPinned = false;
     let sizing = false;
     let sizingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -92,6 +98,9 @@
     let loadError = false;
     let imageLoadToken = 0;
     let lastTapTime = 0;
+    let initialMobileScale = 1;
+    let lastTouchTap: { x: number; y: number; time: number } | undefined;
+    let tapTouchId: number | undefined;
     let revealedPrivacyKey = "";
     let privateImageKeys: ReadonlySet<string> = new Set();
     const unsubscribePrivacy = privateImages.subscribe((keys) => {
@@ -136,18 +145,21 @@
     $: fileName = getDisplayImageName(currentSrc || images[currentIndex] || "");
     $: imageTitle = (imageTitles[currentIndex] || "").trim();
     $: distinctTitle = imageTitle && imageTitle !== fileName ? imageTitle : "";
-    $: fileLabel = clipLabel(fileName);
-    $: titleLabel = clipLabel(distinctTitle);
+    $: fileLabel = isMobile ? fileName : clipLabel(fileName);
+    $: titleLabel = isMobile ? distinctTitle : clipLabel(distinctTitle);
     $: showCopyFile = !!getCopyFilePath(currentSrc || images[currentIndex] || "");
     $: showCopyPNG = !isMobile && !showCopyFile && canCopyImageToClipboard();
     $: showZoomButtons = !["desktop", "desktop-window"].includes(getFrontend());
-    $: toolsExpanded = showOptionButton && (isMobile || !collapseToolbar || toolsOpen || toolsPinned);
-    $: frame = getPreviewFrame(visual.width, visual.height, previewChrome(showOptionButton, toolsExpanded, unlockInFooter));
+    $: toolsExpanded = showOptionButton && (isMobile ? mobileToolsOpen : !collapseToolbar || toolsOpen || toolsPinned);
     $: showOverlayNav = showOptionButton && showImageNav && images.length > 1 && (isMobile || (visual.width >= NAV_MIN_WIDTH && visual.height >= NAV_MIN_HEIGHT));
     $: showOverlayClose = showOptionButton && showImageNav;
+    $: mobileNav = isMobile && showOverlayNav;
+    $: bottomAnchored = isMobile && showOptionButton;
+    $: compactFooter = isMobile && isCompactFooter(mobileBrowseWidth);
+    $: frame = getPreviewFrame(visual.width, visual.height, previewChrome(showOptionButton, toolsExpanded, unlockInFooter, mobileBrowseWidth, mobileNav));
     $: toolActions = collectToolActions(showZoomButtons, showCopyFile, showCopyPNG, rotate, flipH, flipV, toolsPinned, showImageNav, isMobile ? detailPageOpen : detailOverlay, obscureImage);
-    $: shownTools = visibleToolActions(toolActions, frame.width);
-    $: toolsOverflow = shownTools.length < toolActions.length;
+    $: shownTools = visibleToolActions(toolActions, isMobile ? Math.min(frame.width, window.innerWidth) : frame.width);
+    $: toolsOverflow = isMobile || shownTools.length < toolActions.length;
 
     let previewImage: HTMLImageElement | undefined;
     let privacyMosaic: HTMLCanvasElement | undefined;
@@ -285,7 +297,7 @@
     }
 
     function canAccessImage(src = currentPreviewSrc()): boolean {
-        return !!src && src === currentPreviewSrc() && !isImageLocked(src) && !isImageLocked(images[currentIndex] || "");
+        return !loading && !!src && src === currentPreviewSrc() && !isImageLocked(src) && !isImageLocked(images[currentIndex] || "");
     }
 
     function imageAction(src: string, action: () => void): () => void {
@@ -318,10 +330,24 @@
     }
 
     function needsUnlockFooter(width: number, height: number): boolean {
-        return width < 200 || height < 90;
+        return !isMobile && (width < 200 || height < 90);
     }
 
-    function previewChrome(optionButton: boolean, expanded: boolean, compactUnlock: boolean) {
+    function isCompactFooter(width: number) {
+        return Math.min(window.innerWidth, width) <= COMPACT_FOOT_WIDTH;
+    }
+
+    function previewChrome(optionButton: boolean, expanded: boolean, compactUnlock: boolean, browseWidth: number, hasPages: boolean) {
+        if (isMobile && optionButton) {
+            const compact = isCompactFooter(browseWidth);
+            const info = compact ? 0 : PREVIEW_CHROME_INFO;
+            const tools = expanded && !(compact && hasPages) ? PREVIEW_CHROME_TOOLS : 0;
+            return {
+                head: 0,
+                foot: info + (compact ? COMPACT_NAV_SIZE : NAV_TOUCH_SIZE) + tools,
+                minWidth: Math.min(window.innerWidth, Math.max(2 * COMPACT_NAV_SIZE, browseWidth)),
+            };
+        }
         return {
             head: 0,
             foot: (optionButton ? (expanded ? PREVIEW_CHROME_FOOT : PREVIEW_CHROME_INFO) : 0)
@@ -332,15 +358,27 @@
 
     function frameFor(imageWidth: number, imageHeight: number) {
         const compactUnlock = privacyLocked && needsUnlockFooter(imageWidth, imageHeight);
-        return getPreviewFrame(imageWidth, imageHeight, previewChrome(showOptionButton, toolsExpanded, compactUnlock));
+        return getPreviewFrame(imageWidth, imageHeight, previewChrome(showOptionButton, toolsExpanded, compactUnlock, mobileBrowseWidth, mobileNav));
     }
 
-    function fitReservedFoot() {
-        return (showOptionButton ? PREVIEW_CHROME_FOOT : 0) + (unlockInFooter ? PRIVACY_CONTROL_HEIGHT : 0);
+    function fitReservedFoot(width = visual.width, height = visual.height) {
+        return previewChrome(showOptionButton, !isMobile || mobileToolsOpen, privacyLocked && needsUnlockFooter(width, height), width, mobileNav).foot;
+    }
+
+    function mobileContainedScale(scale: number, rotation: number) {
+        if (!isMobile) return scale;
+        const size = getVisualSize(naturalW, naturalH, scale, rotation);
+        return Math.min(scale, getViewportContainScale(naturalW, naturalH, rotation, fitReservedFoot(size.width, size.height)));
+    }
+
+    function fittedScale(rotation: number) {
+        const size = getVisualSize(naturalW, naturalH, 1, rotation);
+        const foot = isMobile ? fitReservedFoot(size.width, size.height) : fitReservedFoot();
+        return mobileContainedScale(getViewportFitScale(naturalW, naturalH, rotation, foot), rotation);
     }
 
     function containHeightFor(imageHeight: number, frameHeight: number) {
-        return Math.max(frameHeight, imageHeight + fitReservedFoot());
+        return isMobile ? frameHeight : Math.max(frameHeight, imageHeight + fitReservedFoot());
     }
 
     function stageRect() {
@@ -353,6 +391,7 @@
     }
 
     function placeCard(imageX: number, imageY: number, imageWidth: number, imageHeight: number, stayOnScreen: boolean) {
+        if (isMobile) mobileBrowseWidth = imageWidth;
         const nextFrame = frameFor(imageWidth, imageHeight);
         const card = {
             x: imageX - nextFrame.offsetX,
@@ -369,6 +408,7 @@
 
     function placeAtCenter(nextScale = displayScale, nextRotate = rotate) {
         const size = getVisualSize(naturalW, naturalH, nextScale, nextRotate);
+        if (isMobile) mobileBrowseWidth = size.width;
         const nextFrame = frameFor(size.width, size.height);
         const reservedHeight = containHeightFor(size.height, nextFrame.height);
         const x = (window.innerWidth - nextFrame.width) / 2;
@@ -392,7 +432,7 @@
     }
 
     function openTools() {
-        if (collapseToolbar) {
+        if (!isMobile && collapseToolbar) {
             toolsOpen = true;
         }
     }
@@ -401,6 +441,14 @@
         if (!toolsPinned) {
             toolsOpen = false;
         }
+    }
+
+    function toggleMobileTools() {
+        if (!mobileToolsOpen) {
+            const overflow = position.y + frame.height + PREVIEW_CHROME_TOOLS - window.innerHeight;
+            if (overflow > 0) position = { x: position.x, y: position.y - overflow };
+        }
+        mobileToolsOpen = !mobileToolsOpen;
     }
 
     function toggleToolsPin() {
@@ -431,7 +479,7 @@
             active: false,
             run: fitToViewport,
         }];
-        if (!locked) {
+        if (!locked && !isMobile) {
             actions.push({
                 id: "detail",
                 label: t("imageDetail", "图片详情"),
@@ -558,15 +606,15 @@
 
     function visibleToolActions(actions: PreviewToolAction[], width: number): PreviewToolAction[] {
         const capacity = previewToolCapacity(width);
-        if (capacity >= actions.length) {
+        if (!isMobile && capacity >= actions.length) {
             return actions;
         }
         return actions.slice(0, Math.max(0, capacity - 1));
     }
 
-    function setScale(nextScale: number, zoomPosition?: Vector2) {
+    function setScale(nextScale: number, zoomPosition?: Vector2, minWidth = MIN_WIDTH) {
         markSizing();
-        const scale = clampDisplayScale(nextScale, naturalW, MIN_WIDTH);
+        const scale = clampDisplayScale(nextScale, naturalW, minWidth);
         const nextSize = getVisualSize(naturalW, naturalH, scale, rotate);
         if (zoomPosition) {
             const next = zoomKeepPoint(stageRect(), nextSize.width, nextSize.height, zoomPosition);
@@ -579,7 +627,7 @@
     }
 
     function fitToViewport() {
-        const scale = getViewportFitScale(naturalW, naturalH, rotate, fitReservedFoot());
+        const scale = fittedScale(rotate);
         displayScale = scale;
         lastCustomScale = 0;
         keepCurrentCenter(scale, rotate, true);
@@ -603,7 +651,7 @@
 
     function rotateBy(delta: number) {
         const nextRotate = (rotate + delta + 360) % 360;
-        const nextScale = Math.min(displayScale, getViewportContainScale(naturalW, naturalH, nextRotate, fitReservedFoot()));
+        const nextScale = mobileContainedScale(Math.min(displayScale, getViewportContainScale(naturalW, naturalH, nextRotate, fitReservedFoot())), nextRotate);
         keepCurrentCenter(nextScale, nextRotate, true);
         displayScale = nextScale;
         rotate = nextRotate;
@@ -630,7 +678,22 @@
         }
     }
 
+    function placeMobileGalleryImage(anchor: DOMRect) {
+        // Snap the anchor once so fractional image heights cannot accumulate drift over many turns.
+        const imageBottom = Math.round(anchor.top) - (compactFooter ? 0 : PREVIEW_CHROME_INFO);
+        // Keep the preferred width across page turns, even if a portrait fits only at a smaller scale.
+        displayScale = Math.min(mobileBrowseWidth / naturalW, window.innerWidth / naturalW,
+            Math.max(1, imageBottom) / naturalH);
+        const size = getVisualSize(naturalW, naturalH, displayScale, 0);
+        const nextFrame = frameFor(size.width, size.height);
+        position = {
+            x: anchor.left + (anchor.width - nextFrame.width) / 2,
+            y: imageBottom - size.height,
+        };
+    }
+
     function openCurrent(isFirst: boolean) {
+        cancelTouchTap();
         const src = images[currentIndex];
         if (!src) {
             return;
@@ -647,6 +710,7 @@
             if (token !== imageLoadToken) {
                 return;
             }
+            const navAnchor = ready && !isFirst ? mobileNavRow?.getBoundingClientRect() : undefined;
             naturalW = loader.naturalWidth;
             naturalH = loader.naturalHeight;
             loadedImage = loader;
@@ -655,13 +719,15 @@
             flipH = false;
             flipV = false;
             if (isFirst || !ready) {
-                displayScale = getViewportFitScale(naturalW, naturalH, 0, fitReservedFoot());
+                displayScale = fittedScale(0);
                 lastCustomScale = 0;
                 placeAtCenter(displayScale, 0);
                 ready = true;
                 requestAnimationFrame(() => floatEl?.focus());
+            } else if (navAnchor) {
+                placeMobileGalleryImage(navAnchor);
             } else {
-                displayScale = switchDisplayScale(naturalW, naturalH, keepWidth, 0, fitReservedFoot());
+                displayScale = mobileContainedScale(switchDisplayScale(naturalW, naturalH, keepWidth, 0, fitReservedFoot(keepWidth)), 0);
                 const nextSize = getVisualSize(naturalW, naturalH, displayScale, 0);
                 const next = keepCenter(
                     oldStage.left,
@@ -673,6 +739,7 @@
                 );
                 placeCard(next.x, next.y, nextSize.width, nextSize.height, true);
             }
+            initialMobileScale = displayScale;
             loading = false;
             preloadNeighbors();
         };
@@ -702,6 +769,7 @@
         }
         const nextIndex = (index + images.length) % images.length;
         if (currentIndex !== nextIndex) {
+            closeOwnedContextMenu();
             relockPrivateImage();
             currentIndex = nextIndex;
         }
@@ -861,7 +929,7 @@
         window.siyuan?.menus?.menu?.remove();
         const pos = pointerPos(event);
         const now = Date.now();
-        if (now - lastTapTime < DOUBLE_TAP_THRESHOLD && event.button === 0) {
+        if (!isMobile && now - lastTapTime < DOUBLE_TAP_THRESHOLD && event.button === 0) {
             toggleFitOrActual(pos);
             lastTapTime = 0;
             return;
@@ -912,7 +980,7 @@
         if (isOnFloat(top)) {
             return true;
         }
-        if (!floatEl || top?.closest(".ipp-detail-page") || !(target instanceof Element) || !target.closest("img")) {
+        if (!floatEl || top?.closest(".ipp-detail-page, .ipp-float") || !(target instanceof Element) || !target.closest("img")) {
             return false;
         }
         const rect = floatEl.getBoundingClientRect();
@@ -929,6 +997,7 @@
             return;
         }
         longPressMoved = true;
+        cancelTouchTap();
         clearTimeout(longPressTimeout);
     }
 
@@ -937,6 +1006,7 @@
             return;
         }
         longPressOpened = true;
+        cancelTouchTap();
         clearTimeout(longPressTimeout);
         isDragging = false;
         dragPointerId = null;
@@ -978,9 +1048,39 @@
         event.stopImmediatePropagation();
     }
 
+    function cancelTouchTap() {
+        lastTouchTap = undefined;
+        tapTouchId = undefined;
+    }
+
+    function finishTouchTap(event: TouchEvent) {
+        const touch = event.changedTouches[0];
+        if (!touch || tapTouchId !== touch.identifier) return;
+        tapTouchId = undefined;
+        const point = { x: touch.clientX, y: touch.clientY };
+        const time = Date.now();
+        if (!longPressOrigin || time - longPressStartedAt >= LONG_PRESS_MS || distanceBetween(point, longPressOrigin) > LONG_PRESS_SLOP) {
+            cancelTouchTap();
+            return;
+        }
+        if (lastTouchTap && time - lastTouchTap.time <= DOUBLE_TAP_THRESHOLD && distanceBetween(point, lastTouchTap) <= LONG_PRESS_SLOP) {
+            lastTouchTap = undefined;
+            const target = displayScale > initialMobileScale ? initialMobileScale : initialMobileScale * 2;
+            setScale(target, point, Math.min(MIN_WIDTH, naturalW * initialMobileScale));
+        } else {
+            lastTouchTap = { ...point, time };
+        }
+    }
+
     function handleWindowTouchStart(event: TouchEvent) {
         const touch = event.changedTouches[0];
         const ownsPreview = !!touch && previewOwnsPoint(event.target, touch.clientX, touch.clientY);
+        if (isMobile && ownsPreview && event.touches.length === 1 && !loading && !loadError &&
+            event.target instanceof Element && event.target.closest(".ipp-stage") && !isFloatControl(event.target)) {
+            tapTouchId = touch.identifier;
+        } else {
+            cancelTouchTap();
+        }
         if (ownsPreview) {
             for (let i = 0; i < event.changedTouches.length; i++) {
                 imageTouchIds.add(event.changedTouches[i].identifier);
@@ -1052,6 +1152,12 @@
     }
 
     function handleWindowTouchEnd(event: TouchEvent) {
+        if (event.type === "touchcancel") {
+            cancelTouchTap();
+            longPressMoved = true;
+        } else if (!event.touches.length) {
+            finishTouchTap(event);
+        }
         for (let i = 0; i < event.changedTouches.length; i++) {
             imageTouchIds.delete(event.changedTouches[i].identifier);
         }
@@ -1085,6 +1191,8 @@
             }
         }
         if (event.touches.length === 0) {
+            longPressOrigin = null;
+            longPressStartedAt = 0;
             imageTouchIds.clear();
             touchOnControl = false;
             isDragging = false;
@@ -1210,12 +1318,6 @@
     }
 
     function handleKeydown(event: KeyboardEvent) {
-        if (detailPageOpen && event.key === "Escape") {
-            event.preventDefault();
-            event.stopPropagation();
-            detailPageOpen = false;
-            return;
-        }
         if (!isPreviewSelected()) {
             return;
         }
@@ -1309,7 +1411,7 @@
     }
 
     function initSizeAndPosition() {
-        displayScale = getViewportFitScale(naturalW, naturalH, 0, fitReservedFoot());
+        displayScale = fittedScale(0);
         rotate = 0;
         flipH = false;
         flipV = false;
@@ -1367,6 +1469,25 @@
             icon: "iconUpload",
             click: imageAction(src, () => exportAsset(src)),
         }).element);
+        if (frontend === "mobile") {
+            const { share, saveToGallery } = getMobileImageActions(src);
+            if (share) {
+                menu.append(new MenuItem({
+                    id: "shareAsset",
+                    label: t("shareAsset", "分享", "shareAsset"),
+                    icon: "iconForward",
+                    click: imageAction(src, share),
+                }).element);
+            }
+            if (saveToGallery) {
+                menu.append(new MenuItem({
+                    id: "saveToGallery",
+                    label: t("saveToGallery", "保存到相册", "saveToGallery"),
+                    icon: "iconGallery",
+                    click: imageAction(src, saveToGallery),
+                }).element);
+            }
+        }
         appendSeparator(menu);
         menu.append(new MenuItem({
             icon: "iconCopy",
@@ -1602,7 +1723,7 @@
         const host = event.currentTarget as HTMLElement;
         const button = host.querySelector("button");
         const target = button || host;
-        const cut = Array.from(full).length > NAME_LIMIT || target.scrollWidth > target.clientWidth + 1;
+        const cut = (!isMobile && Array.from(full).length > NAME_LIMIT) || target.scrollWidth > target.clientWidth;
         if (key === "name") {
             fileNameCut = cut;
         } else {
@@ -1666,6 +1787,13 @@
         }
     }
 
+    async function closeDetailPage() {
+        detailPageOpen = false;
+        await tick();
+        const sheets = document.querySelectorAll<HTMLElement>(".ipp-detail-page");
+        (sheets[sheets.length - 1] || floatEl)?.focus();
+    }
+
     function openDetailWindow() {
         if (!canAccessImage()) {
             return;
@@ -1727,7 +1855,10 @@
     class:ipp-float--flash={flashing}
     class:ipp-float--chrome={showOptionButton}
     tabindex="0"
-    style="left:{position.x}px;top:{position.y}px;width:{frame.width}px;height:{frame.height}px;--ipp-info:{PREVIEW_CHROME_INFO}px;--ipp-tools:{PREVIEW_CHROME_TOOLS}px;--ipp-stage-h:{visual.height}px;--ipp-privacy-control-h:{PRIVACY_CONTROL_HEIGHT}px"
+    style:top={bottomAnchored ? undefined : `${position.y}px`}
+    style:bottom={bottomAnchored ? `calc(100% - ${position.y + frame.height}px)` : undefined}
+    style:height={bottomAnchored ? undefined : `${frame.height}px`}
+    style="left:{position.x}px;width:{frame.width}px;--ipp-info:{PREVIEW_CHROME_INFO}px;--ipp-tools:{PREVIEW_CHROME_TOOLS}px;--ipp-stage-h:{visual.height}px;--ipp-foot-h:{frame.height - visual.height}px;--ipp-privacy-control-h:{PRIVACY_CONTROL_HEIGHT}px"
     on:pointerdown={handlePointerDown}
     on:contextmenu|stopPropagation={handleContextmenu}
     on:touchstart={handleTouchStart}
@@ -1737,14 +1868,6 @@
     {#if showOverlayClose}
         <button type="button" class="ipp-btn ipp-nav ipp-nav--close" class:ipp-nav--on-light={navSurface.close === "light"} class:ipp-nav--on-dark={navSurface.close === "dark"} aria-label={t("closeImage", "关闭图片", "close")} on:click|stopPropagation={handleCloseClick} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
             <svg class="ipp-icon"><use xlink:href="#ippIconClose"></use></svg>
-        </button>
-    {/if}
-    {#if showOverlayNav && isMobile}
-        <button type="button" class="ipp-btn ipp-nav ipp-nav--prev" class:ipp-nav--on-light={navSurface.prev === "light"} class:ipp-nav--on-dark={navSurface.prev === "dark"} title={t("prevImage", "上一张", "previous")} on:click|stopPropagation={handlePrev} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-            <svg class="ipp-icon"><use xlink:href="#ippIconPrev"></use></svg>
-        </button>
-        <button type="button" class="ipp-btn ipp-nav ipp-nav--next" class:ipp-nav--on-light={navSurface.next === "light"} class:ipp-nav--on-dark={navSurface.next === "dark"} title={t("nextImage", "下一张", "next")} on:click|stopPropagation={handleNext} on:pointerdown|stopPropagation on:dblclick|stopPropagation>
-            <svg class="ipp-icon"><use xlink:href="#ippIconNext"></use></svg>
         </button>
     {/if}
     <div class="ipp-body">
@@ -1819,12 +1942,13 @@
     {#if showOptionButton}
         <div
             class="ipp-foot"
+            class:ipp-foot--compact={compactFooter}
             class:ipp-foot--tools={toolsExpanded}
             on:pointerenter={openTools}
             on:pointerleave={closeTools}
         >
             <div class="ipp-info">
-                <div class="ipp-info__names">
+                <div class="ipp-info__names" class:ipp-info__names--pair={isMobile && fileName && distinctTitle && !obscureImage}>
                     {#if obscureImage}
                         <span>{t("privacyLocked", "隐私图片")}</span>
                     {:else if fileName}
@@ -1862,40 +1986,68 @@
                         </span>
                     {/if}
                 </div>
-                {#if images.length}
+                {#if !isMobile && images.length}
                     <span class="ipp-info__index">{currentIndex + 1} / {images.length}</span>
                 {/if}
                 {#if naturalW && naturalH && !obscureImage}
                     <span class="ipp-info__dim">{naturalW} × {naturalH}</span>
                 {/if}
             </div>
-            <div class="ipp-tools">
-                {#each shownTools as action (action.id)}
-                    <button
-                        type="button"
-                        class="ipp-btn"
-                        class:ipp-btn--active={action.active}
-                        aria-label={action.label}
-                        on:click|stopPropagation={action.run}
-                        on:pointerdown|stopPropagation
-                        on:dblclick|stopPropagation
-                    >
-                        <svg class="ipp-icon ipp-icon--line"><use xlink:href={action.icon}></use></svg>
+            {#if isMobile}
+                <div bind:this={mobileNavRow} class="ipp-mobile-nav" class:ipp-mobile-nav--pages={mobileNav} style="--nav-size:{compactFooter ? COMPACT_NAV_SIZE : NAV_TOUCH_SIZE}px">
+                    <button type="button" class="ipp-mobile-detail" disabled={obscureImage || loading}
+                        aria-label={t("imageDetail", "图片详情")} on:click|stopPropagation={openDetailPage}>
+                        <svg class="ipp-icon"><use xlink:href="#iconInfo"></use></svg>
                     </button>
-                {/each}
-                {#if toolsOverflow}
-                    <button
-                        type="button"
-                        class="ipp-btn"
-                        aria-label={t("moreTools", "更多操作")}
-                        on:click|stopPropagation={openToolsOverflow}
-                        on:pointerdown|stopPropagation
-                        on:dblclick|stopPropagation
-                    >
-                        <svg class="ipp-icon"><use xlink:href="#iconMore"></use></svg>
+                    <div class="ipp-mobile-pages">
+                        {#if mobileNav}
+                            <button type="button" aria-label={t("prevImage", "上一张", "previous")} on:click|stopPropagation={handlePrev}>
+                                <svg class="ipp-icon"><use xlink:href="#ippIconPrev"></use></svg>
+                            </button>
+                        {/if}
+                        <span class="ipp-mobile-index" style="min-width:{2 * String(images.length).length + 1}ch">{currentIndex + 1}/{images.length}</span>
+                        {#if mobileNav}
+                            <button type="button" aria-label={t("nextImage", "下一张", "next")} on:click|stopPropagation={handleNext}>
+                                <svg class="ipp-icon"><use xlink:href="#ippIconNext"></use></svg>
+                            </button>
+                        {/if}
+                    </div>
+                    <button type="button" class="ipp-mobile-expand" aria-expanded={mobileToolsOpen}
+                        aria-label={mobileToolsOpen ? t("hideImageTools", "收起工具栏") : t("showImageTools", "展开工具栏")}
+                        on:click|stopPropagation={toggleMobileTools}>
+                        <svg class="ipp-icon"><use xlink:href="#ippIconNext"></use></svg>
                     </button>
-                {/if}
-            </div>
+                </div>
+            {/if}
+            {#if !isMobile || (mobileToolsOpen && !(compactFooter && mobileNav))}
+                <div class="ipp-tools">
+                    {#each shownTools as action (action.id)}
+                        <button
+                            type="button"
+                            class="ipp-btn"
+                            class:ipp-btn--active={action.active}
+                            aria-label={action.label}
+                            on:click|stopPropagation={action.run}
+                            on:pointerdown|stopPropagation
+                            on:dblclick|stopPropagation
+                        >
+                            <svg class="ipp-icon ipp-icon--line"><use xlink:href={action.icon}></use></svg>
+                        </button>
+                    {/each}
+                    {#if toolsOverflow}
+                        <button
+                            type="button"
+                            class="ipp-btn"
+                            aria-label={t("moreTools", "更多操作")}
+                            on:click|stopPropagation={openToolsOverflow}
+                            on:pointerdown|stopPropagation
+                            on:dblclick|stopPropagation
+                        >
+                            <svg class="ipp-icon"><use xlink:href="#iconMore"></use></svg>
+                        </button>
+                    {/if}
+                </div>
+            {/if}
         </div>
     {/if}
 </div>
@@ -1924,7 +2076,8 @@
         partialText={t("detailUnavailable", "无法读取详细信息")}
         copiedText={t("copiedSuccess", "复制成功")}
         backLabel={t("back", "返回")}
-        onClose={() => detailPageOpen = false}
+        resizeLabel={t("resizeDetailSheet", "切换半屏或全屏")}
+        onClose={closeDetailPage}
     />
 {/if}
 
@@ -2117,6 +2270,21 @@
         background: var(--ipp-panel-bg);
     }
 
+    /* Keep the footer and shadow on the same bottom edge throughout a page turn. */
+    .ipp-float--mobile.ipp-float--chrome.ipp-float--ready .ipp-body {
+        height: var(--ipp-stage-h);
+    }
+
+    .ipp-float--mobile.ipp-float--chrome .ipp-stage {
+        align-self: flex-end;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+        .ipp-float--mobile.ipp-float--chrome.ipp-float--ready:not(.ipp-float--instant) .ipp-body {
+            transition: height 0.18s ease;
+        }
+    }
+
     .ipp-stage {
         position: relative;
         flex: none;
@@ -2189,6 +2357,13 @@
 
     .ipp-privacy-control--footer:last-child {
         border-radius: 0 0 8px 8px;
+    }
+
+    .ipp-float--mobile .ipp-privacy-control {
+        top: auto;
+        bottom: var(--ipp-foot-h);
+        height: min(var(--ipp-stage-h), calc(100% - var(--ipp-foot-h)));
+        overflow: hidden;
     }
 
     .ipp-privacy-unlock {
@@ -2376,10 +2551,106 @@
         opacity: 1;
     }
 
-    .ipp-float--mobile .ipp-nav--prev,
-    .ipp-float--mobile .ipp-nav--next {
-        top: calc(var(--ipp-stage-h) * 0.5);
-        z-index: 4;
+    .ipp-mobile-nav {
+        display: grid;
+        grid-template-columns: var(--nav-size) minmax(0, 1fr) var(--nav-size);
+        align-items: center;
+        height: var(--nav-size);
+    }
+
+    .ipp-mobile-pages {
+        display: grid;
+        grid-template-columns: minmax(var(--nav-size), 1fr) auto minmax(var(--nav-size), 1fr);
+        align-items: center;
+    }
+
+    .ipp-float--mobile .ipp-foot {
+        align-self: center;
+        max-width: 100vw;
+    }
+
+    .ipp-mobile-index {
+        grid-column: 2;
+        font-size: 11px;
+        text-align: center;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .ipp-mobile-detail { justify-self: start; }
+    .ipp-mobile-detail:disabled { opacity: 0.45; }
+    .ipp-mobile-expand { justify-self: end; }
+    .ipp-mobile-expand svg { transform: rotate(90deg); }
+    .ipp-mobile-expand[aria-expanded="true"] svg { transform: rotate(-90deg); }
+
+    .ipp-float--mobile .ipp-info {
+        grid-template-columns: minmax(0, 1fr) auto;
+        column-gap: 6px;
+        --name-gap: 6px;
+    }
+
+    .ipp-float--mobile .ipp-info__names { display: flex; }
+    .ipp-float--mobile .ipp-info__dim { display: block; grid-column: 2; }
+
+    /* Content-sized tracks let short labels yield space. A long filename gets two shares. */
+    .ipp-float--mobile .ipp-info__names--pair {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, max-content));
+        gap: 0;
+    }
+    .ipp-info__names--pair .ipp-copy:first-child { grid-column: span 2; max-width: 100%; }
+    .ipp-info__names--pair .ipp-copy:last-child { max-width: 100%; margin-inline-start: var(--name-gap); }
+
+    @container (max-width: 270px) {
+        .ipp-float--mobile .ipp-info {
+            font-size: 11px;
+            padding-inline: 6px;
+            column-gap: 4px;
+            --name-gap: 4px;
+        }
+    }
+    .ipp-mobile-nav button {
+        display: grid;
+        place-items: center;
+        width: var(--nav-size);
+        height: var(--nav-size);
+        padding: 0;
+        border: 0;
+        border-radius: 8px;
+        color: inherit;
+        background: transparent;
+    }
+
+    .ipp-mobile-nav button:active {
+        background: rgba(255, 255, 255, 0.2);
+    }
+
+    .ipp-mobile-pages button {
+        width: 100%;
+    }
+
+    @container (max-width: 220px) {
+        .ipp-mobile-nav--pages {
+            grid-template-columns: minmax(0, 1fr) var(--nav-size);
+        }
+        .ipp-mobile-nav--pages .ipp-mobile-detail { display: none; }
+        .ipp-mobile-pages { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+    }
+
+    .ipp-foot--compact .ipp-mobile-nav { order: -1; }
+    .ipp-foot--compact .ipp-info { display: none; }
+    .ipp-foot--compact .ipp-mobile-nav--pages { grid-template-columns: 1fr; }
+    .ipp-foot--compact .ipp-mobile-nav--pages .ipp-mobile-expand,
+    .ipp-foot--compact .ipp-mobile-nav:not(.ipp-mobile-nav--pages) .ipp-mobile-pages { display: none; }
+    .ipp-foot--compact .ipp-mobile-expand { grid-column: -2; }
+    .ipp-foot--compact .ipp-mobile-pages {
+        justify-content: center;
+        grid-template-columns: var(--nav-size) auto var(--nav-size);
+    }
+
+    @container (max-width: 128px) {
+        .ipp-foot--compact .ipp-mobile-index { display: none; }
+        .ipp-foot--compact .ipp-mobile-pages { grid-template-columns: repeat(2, var(--nav-size)); }
     }
 
     .ipp-float:not(.ipp-float--mobile):has(.ipp-nav:hover) .ipp-nav,

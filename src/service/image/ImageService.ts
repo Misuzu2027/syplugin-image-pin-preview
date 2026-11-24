@@ -30,6 +30,15 @@ const EDITOR_IMAGE_SPAN = `span[data-type*="img"].img`;
 const EDITOR_IMAGE_SELECTOR = `${EDITOR_IMAGE_SPAN} img`;
 const EDITOR_SCOPE_IMAGE_SELECTOR = `${EDITOR_IMAGE_SELECTOR}, .protyle-wysiwyg img:not(.emoji):not(.av__cellassetimg), .protyle-preview img:not(.emoji)`;
 const OPEN_DEBOUNCE_MS = 400;
+const DOUBLE_TAP_MS = 300;
+const TAP_SLOP = 12;
+
+interface EditorTap {
+    image: HTMLImageElement;
+    x: number;
+    y: number;
+    time: number;
+}
 
 export class ImageService {
     public static get ins(): ImageService {
@@ -54,6 +63,8 @@ let previewCount = 0;
 const previewSessions = new Set<PreviewSession>();
 let lastOpenKey = "";
 let lastOpenAt = 0;
+let activeTap: EditorTap | undefined;
+let previousTap: EditorTap | undefined;
 
 function bindPreviewEvents() {
     if (eventsBound) {
@@ -62,6 +73,12 @@ function bindPreviewEvents() {
     eventsBound = true;
     document.addEventListener("click", handleCaptureClick, true);
     document.addEventListener("dblclick", handleCaptureDblClick, true);
+    if (EnvConfig.ins.isMobile) {
+        document.addEventListener("touchstart", startEditorTap, { capture: true, passive: true });
+        document.addEventListener("touchmove", moveEditorTap, { capture: true, passive: true });
+        document.addEventListener("touchend", finishEditorTap, { capture: true, passive: false });
+        document.addEventListener("touchcancel", clearEditorTaps, true);
+    }
     document.addEventListener("visibilitychange", handleVisibilityChange);
     EnvConfig.ins.plugin.eventBus.on("open-menu-image", addImagePrivacyMenu);
     EnvConfig.ins.plugin.eventBus.on("switch-protyle", handleDocumentSwitch);
@@ -74,12 +91,18 @@ function unbindPreviewEvents() {
     eventsBound = false;
     document.removeEventListener("click", handleCaptureClick, true);
     document.removeEventListener("dblclick", handleCaptureDblClick, true);
+    document.removeEventListener("touchstart", startEditorTap, true);
+    document.removeEventListener("touchmove", moveEditorTap, true);
+    document.removeEventListener("touchend", finishEditorTap, true);
+    document.removeEventListener("touchcancel", clearEditorTaps, true);
+    clearEditorTaps();
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     EnvConfig.ins.plugin.eventBus.off("open-menu-image", addImagePrivacyMenu);
     EnvConfig.ins.plugin.eventBus.off("switch-protyle", handleDocumentSwitch);
 }
 
 function handleDocumentSwitch() {
+    clearEditorTaps();
     relockImagePrivacyDom();
     relockPreviews();
 }
@@ -92,6 +115,7 @@ function relockPreviews() {
 
 function handleVisibilityChange() {
     if (document.hidden) {
+        clearEditorTaps();
         relockPreviews();
     }
 }
@@ -252,7 +276,51 @@ async function handleCaptureDblClick(event: MouseEvent) {
     await openFromEditorImage(image, event.ctrlKey || event.metaKey);
 }
 
-function shouldUsePluginPreview(event: MouseEvent, image: HTMLImageElement): boolean {
+function clearEditorTaps() {
+    activeTap = previousTap = undefined;
+}
+
+function startEditorTap(event: TouchEvent) {
+    const image = asImageElement(event.target);
+    if (event.touches.length !== 1 || !image || isInsidePreviewer(image) ||
+        !isEditorContentImage(image) || isPreviewModeImage(image) || !shouldUsePluginPreview(event, image)) {
+        clearEditorTaps();
+        return;
+    }
+    const touch = event.touches[0];
+    activeTap = { image, x: touch.clientX, y: touch.clientY, time: event.timeStamp };
+}
+
+function isNearTap(touch: Touch, tap: EditorTap): boolean {
+    return Math.hypot(touch.clientX - tap.x, touch.clientY - tap.y) <= TAP_SLOP;
+}
+
+function moveEditorTap(event: TouchEvent) {
+    if (activeTap && (event.touches.length !== 1 || !isNearTap(event.touches[0], activeTap))) {
+        clearEditorTaps();
+    }
+}
+
+function finishEditorTap(event: TouchEvent) {
+    const tap = activeTap;
+    const touch = event.changedTouches[0];
+    activeTap = undefined;
+    if (!tap || !touch || event.touches.length || event.timeStamp - tap.time > DOUBLE_TAP_MS ||
+        !isNearTap(touch, tap) || !tap.image.isConnected || !shouldUsePluginPreview(event, tap.image)) {
+        previousTap = undefined;
+        return;
+    }
+    if (previousTap?.image === tap.image && event.timeStamp - previousTap.time <= DOUBLE_TAP_MS && isNearTap(touch, previousTap)) {
+        previousTap = undefined;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        void openFromEditorImage(tap.image, event.ctrlKey || event.metaKey);
+        return;
+    }
+    previousTap = { image: tap.image, x: touch.clientX, y: touch.clientY, time: event.timeStamp };
+}
+
+function shouldUsePluginPreview(event: MouseEvent | TouchEvent, image: HTMLImageElement): boolean {
     return (isPluginOpen() && !event.altKey) || isImagePrivate(image.getAttribute("src") || "");
 }
 
@@ -330,9 +398,10 @@ export function previewImages(images: string[], startIndex = 0, imageTitles: str
 
     previewCount++;
     maxZIndex++;
+    updateMobileDetailZIndex();
 
     const container = createPreviewContainer();
-    container.addEventListener("mousedown", handleContainerMouseDown);
+    container.addEventListener("pointerdown", handleContainerPointerDown, true);
 
     const session: PreviewSession = {
         images: images.slice(),
@@ -362,7 +431,7 @@ function createPreviewContainer(): HTMLElement {
     return container;
 }
 
-function handleContainerMouseDown(event: MouseEvent) {
+function handleContainerPointerDown(event: PointerEvent) {
     bringHostToFront(event.currentTarget as HTMLElement);
 }
 
@@ -406,7 +475,12 @@ function bringHostToFront(host: HTMLElement) {
         return;
     }
     maxZIndex++;
+    updateMobileDetailZIndex();
     host.style.zIndex = String(maxZIndex);
+}
+
+function updateMobileDetailZIndex() {
+    document.documentElement.style.setProperty("--ipp-detail-z", String(maxZIndex + 1));
 }
 
 function closeImagePreview(session: PreviewSession) {
@@ -417,6 +491,7 @@ function closeImagePreview(session: PreviewSession) {
     if (previewCount <= 0) {
         previewCount = 0;
         maxZIndex = 99999;
+        document.documentElement.style.removeProperty("--ipp-detail-z");
     }
 }
 
